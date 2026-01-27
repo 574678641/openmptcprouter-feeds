@@ -44,7 +44,7 @@ define Package/bpftune/description
 endef
 
 TARGET_CFLAGS += -I$(STAGING_DIR)/usr/include/libnl3
-TARGET_LDFLAGS += -lbpf -lcap -lnl-3 -lnl-route-3
+TARGET_LDFLAGS += -lbpf -lcap -lnl-3 -lnl-route-3 -ldl -lm -lrt -lcap
 
 MAKE_FLAGS += \
 	V=1 \
@@ -53,6 +53,7 @@ MAKE_FLAGS += \
 	LDFLAGS="$(TARGET_LDFLAGS) -L$(PKG_BUILD_DIR)/src" \
 	BPF_CFLAGS="-g -fno-stack-protector -Wall -I$(STAGING_DIR)/usr/include -I$(PKG_BUILD_DIR)/include -I$(PKG_BUILD_DIR)/src" \
 	BPF_INCLUDE="$(STAGING_DIR)/usr/include" \
+	NL_INCLUDE="$(STAGING_DIR)/usr/include/libnl3" \
 	CLANG="clang" \
 	LLC="llc" \
 	BPFTOOL="$(STAGING_DIR_HOST)/usr/sbin/bpftool" \
