@@ -4,9 +4,6 @@
 
 #include "bpf_experimental.h"
 
-/* mptcp helpers from include/net/mptcp.h */
-#define MPTCP_SUBFLOWS_MAX 8
-
 /* list helpers from include/linux/list.h */
 static inline int list_is_head(const struct list_head *list,
 			       const struct list_head *head)
@@ -43,10 +40,12 @@ mptcp_subflow_tcp_sock(const struct mptcp_subflow_context *subflow)
 }
 
 /* ksym */
+extern struct mptcp_subflow_context *
+bpf_mptcp_subflow_ctx(const struct sock *sk) __ksym;
+extern struct sock *
+bpf_mptcp_subflow_tcp_sock(const struct mptcp_subflow_context *subflow) __ksym;
+
 extern void mptcp_subflow_set_scheduled(struct mptcp_subflow_context *subflow,
 					bool scheduled) __ksym;
-
-extern struct mptcp_subflow_context *
-bpf_mptcp_subflow_ctx_by_pos(const struct mptcp_sched_data *data, unsigned int pos) __ksym;
 
 #endif
