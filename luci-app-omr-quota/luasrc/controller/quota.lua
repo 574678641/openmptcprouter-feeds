@@ -4,10 +4,10 @@
 module("luci.controller.quota", package.seeall)
 
 function index()
-	if not nixio.fs.access("/etc/config/omr-quota") then
-		return
-	end
-	local page
-	page = entry({"admin", "network", "quota"}, cbi("quota/quota"), _("Quota"))
-	page.dependent = true
+	--if not nixio.fs.access("/etc/config/omr-quota") then
+	--	return
+	--end
+	--local page
+	--page = entry({"admin", "network", "quota"}, cbi("quota/quota"), _("Quota"))
+	--page.dependent = true
 end
