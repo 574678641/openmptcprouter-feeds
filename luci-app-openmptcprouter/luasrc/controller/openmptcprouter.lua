@@ -8,19 +8,19 @@ local ipc = require "luci.ip"
 module("luci.controller.openmptcprouter", package.seeall)
 
 function index()
-	local ucic  = luci.model.uci.cursor()
-	menuentry = ucic:get("openmptcprouter","settings","menu") or "OpenMPTCProuter"
-	entry({"admin", "system", menuentry:lower()}, alias("admin", "system", menuentry:lower(), "wizard"), _(menuentry), 1)
-	entry({"admin", "system", menuentry:lower(), "wizard"}, template("openmptcprouter/wizard"), _("Settings Wizard"), 1)
-	entry({"admin", "system", menuentry:lower(), "wizard_add"}, post("wizard_add"))
-	entry({"admin", "system", menuentry:lower(), "status"}, template("openmptcprouter/wanstatus"), _("Status"), 2).leaf = true
-	entry({"admin", "system", menuentry:lower(), "interfaces_status"}, call("interfaces_status")).leaf = true
-	entry({"admin", "system", menuentry:lower(), "settings"}, template("openmptcprouter/settings"), _("Advanced Settings"), 3).leaf = true
-	entry({"admin", "system", menuentry:lower(), "settings_add"}, post("settings_add"))
-	entry({"admin", "system", menuentry:lower(), "update_vps"}, post("update_vps"))
-	entry({"admin", "system", menuentry:lower(), "backup"}, template("openmptcprouter/backup"), _("Backup on server"), 3).leaf = true
-	entry({"admin", "system", menuentry:lower(), "backupgr"}, post("backupgr"))
-	entry({"admin", "system", menuentry:lower(), "debug"}, template("openmptcprouter/debug"), _("Show all settings"), 5).leaf = true
+--	local ucic  = luci.model.uci.cursor()
+--	menuentry = ucic:get("openmptcprouter","settings","menu") or "OpenMPTCProuter"
+--	entry({"admin", "system", menuentry:lower()}, alias("admin", "system", menuentry:lower(), "wizard"), _(menuentry), 1)
+--	entry({"admin", "system", menuentry:lower(), "wizard"}, template("openmptcprouter/wizard"), _("Settings Wizard"), 1)
+--	entry({"admin", "system", menuentry:lower(), "wizard_add"}, post("wizard_add"))
+--	entry({"admin", "system", menuentry:lower(), "status"}, template("openmptcprouter/wanstatus"), _("Status"), 2).leaf = true
+--	entry({"admin", "system", menuentry:lower(), "interfaces_status"}, call("interfaces_status")).leaf = true
+--	entry({"admin", "system", menuentry:lower(), "settings"}, template("openmptcprouter/settings"), _("Advanced Settings"), 3).leaf = true
+--	entry({"admin", "system", menuentry:lower(), "settings_add"}, post("settings_add"))
+--	entry({"admin", "system", menuentry:lower(), "update_vps"}, post("update_vps"))
+--	entry({"admin", "system", menuentry:lower(), "backup"}, template("openmptcprouter/backup"), _("Backup on server"), 3).leaf = true
+--	entry({"admin", "system", menuentry:lower(), "backupgr"}, post("backupgr"))
+--	entry({"admin", "system", menuentry:lower(), "debug"}, template("openmptcprouter/debug"), _("Show all settings"), 5).leaf = true
 end
 
 function interface_from_device(dev)

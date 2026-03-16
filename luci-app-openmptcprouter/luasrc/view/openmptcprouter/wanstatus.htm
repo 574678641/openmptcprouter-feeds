@@ -99,7 +99,7 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 				temp += '</a>';
 
 				temp += '<li id="networkRootNode"><table><tr><td><table>';
-				if (mArray.wans)
+				if (mArray.wans && mArray.wans.length > 0)
 				{
 					temp += '<tr class="spaceline"><td></td></tr>';
 					for( var j = 1; j < mArray.wans.length; j++ )
@@ -413,7 +413,7 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 				temp += '</a></td></tr></table>';
 				temp += '</td>';
 			}
-			if (mArray !== null && (mArray.wans || mArray.tunnels))
+			if (mArray !== null && ((mArray.wans && mArray.wans.length > 0) || (mArray.tunnels && mArray.tunnels.length > 0)))
 			{
 				temp += '<td><ul>';
 				var master = 0;
@@ -702,12 +702,6 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 
 					temp += '</a></li>';
 				}
-				if (mArray.wans.length == 0)
-				{
-					temp += '<li>';
-					temp += '<%:No WAN with multipath enabled:%>';
-					temp += '</li>';
-				}
 				for( var i = 0; i < mArray.tunnels.length; i++ )
 				{
 					// Get link color
@@ -867,8 +861,11 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 				temp += '</ul></td>';
 				temp += '</tr></table>';
 			}
+			if (mArray !== null && !(mArray.wans && mArray.wans.length > 0) && !(mArray.tunnels && mArray.tunnels.length > 0)) {
+				temp += '<td><ul><li><%:No WAN with multipath enabled:%></li></ul></td>';
+			}
 			if (mArray === null) {
-			    temp += '<%:No data%>';
+				temp += '<%:No data%>';
 			}
 			temp += '</li>';
 			// Close tree
@@ -896,18 +893,17 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 
 	function getNetworkNodeTemplate(equipmentIcon, statusIcon, title, statusMessageClass, statusMessage, content)
 	{
-		return String.format('<div class="network-node">' +
-						'<div class="equipment-icon">%s</div>' +
-						'<div class="status-icon"><img src="%s" /></div>' +
-						'<div class="info">' +
-							'<div class="title">%s</div>' +
-							'<div class="status-message %s">%s</div>' +
-							'<div class="content">%s</div>' +
-							'<div class="clear"></div>' +
+		var nodeClass = statusMessageClass === 'error' ? 'error' : statusMessageClass === 'warning' ? 'warning' : 'ok';
+		return String.format('<div class="network-node %s">' +
+						'<div class="node-icon">%s</div>' +
+						'<div class="node-body">' +
+							'<div class="node-title">%s</div>' +
+							'<div class="node-status">%s</div>' +
+							'<div class="node-details">%s</div>' +
 						'</div>' +
-						'<div class="clear"></div>' +
+						'<div class="node-dot"></div>' +
 					'</div>',
-					equipmentIcon, statusIcon, title, statusMessageClass, statusMessage, content);
+					nodeClass, equipmentIcon, title, statusMessage, content);
 	}
 
 	function stringToColour(str) {
