@@ -463,6 +463,30 @@ local function _set_or_delete(config, section, option, value)
 	end
 end
 
+local function _unique_string_list(values)
+	local list = {}
+	local seen = {}
+
+	if type(values) == "table" then
+		for _, value in ipairs(values) do
+			local item = _as_string(value, "")
+			if item ~= "" and not seen[item] then
+				seen[item] = true
+				table.insert(list, item)
+			end
+		end
+	else
+		for item in _as_string(values, ""):gmatch("%S+") do
+			if not seen[item] then
+				seen[item] = true
+				table.insert(list, item)
+			end
+		end
+	end
+
+	return list
+end
+
 function wizard_add(args)
 	local interfaces = _parse_json_table(args.interfaces)
 	local servers = _parse_json_table(args.servers)
@@ -637,30 +661,14 @@ function wizard_add(args)
 				_set_or_delete("openmptcprouter", sid, "disabled", _to_flag(srv.disabled))
 				ucic:set("openmptcprouter", sid, "master", sid == master and "1" or "0")
 
-				if type(srv.ips) == "table" then
-					local iplist = {}
-					for _, ip in ipairs(srv.ips) do
-						local sip = _as_string(ip, "")
-						if sip ~= "" then
-							table.insert(iplist, sip)
-						end
-					end
-					if #iplist > 0 then
-						ucic:set("openmptcprouter", sid, "ip", iplist)
-						if sid == master then
-							master_ip = iplist[1]
-						end
-					else
-						ucic:delete("openmptcprouter", sid, "ip")
+				local iplist = _unique_string_list(srv.ips)
+				if #iplist > 0 then
+					ucic:set("openmptcprouter", sid, "ip", iplist)
+					if sid == master then
+						master_ip = iplist[1]
 					end
 				else
-					local ipone = _as_string(srv.ips, "")
-					if ipone ~= "" then
-						ucic:set("openmptcprouter", sid, "ip", ipone)
-						if sid == master then
-							master_ip = ipone
-						end
-					end
+					ucic:delete("openmptcprouter", sid, "ip")
 				end
 
 				if sid == master then
