@@ -141,6 +141,17 @@ function splitDeviceAndVlan(device) {
 	};
 }
 
+function uniqueValues(list) {
+	var seen = {};
+	return L.toArray(list).filter(function(v) {
+		var s = String(v == null ? '' : v).trim();
+		if (!s || seen[s])
+			return false;
+		seen[s] = true;
+		return true;
+	});
+}
+
 var excludeRe = /^(lo|6in4-omr6in4|mlvpn0|ifb|sit|gre|ip6|teql|erspan|tun|bond)/;
 
 /* Minimal CSS: only wizard step nav + panel transitions (rest is native LuCI) */
@@ -294,7 +305,7 @@ return view.extend({
 
 				servers.push({
 					name: sid,
-					ips: L.toArray(uci.get('openmptcprouter', sid, 'ip')).filter(Boolean),
+					ips: uniqueValues(uci.get('openmptcprouter', sid, 'ip')),
 					password: uci.get('openmptcprouter', sid, 'password') || '',
 					username: uci.get('openmptcprouter', sid, 'username') || 'openmptcprouter',
 					disabled: uci.get('openmptcprouter', sid, 'disabled') || '0'
@@ -366,6 +377,12 @@ return view.extend({
 		o = s.option(form.DynamicList, 'ip', _('Server IP'));
 		o.datatype = 'ipaddr';
 		o.description = _('Server IP will be set for proxy and VPN');
+		o.write = function(sid, val) {
+			var ips = uniqueValues(val);
+			uci.unset('openmptcprouter', sid, 'ip');
+			if (ips.length)
+				uci.set('openmptcprouter', sid, 'ip', ips);
+		};
 
 		o = s.option(form.Value, 'username', _('Server username'));
 		o.description = _('API username to retrieve personnalized settings from the server.');
@@ -911,9 +928,9 @@ return view.extend({
 			});
 
 			// Nav buttons
-			var btnPrev = E('button', { 'class': 'cbi-button' }, '← ' + _('Previous'));
-			var btnNext = E('button', { 'class': 'cbi-button cbi-button-apply' }, _('Next') + ' →');
-			var btnSave = E('button', { 'class': 'cbi-button cbi-button-apply' }, _('Save & Apply'));
+			var btnPrev = E('button', { 'type': 'button', 'class': 'cbi-button' }, '← ' + _('Previous'));
+			var btnNext = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply' }, _('Next') + ' →');
+			var btnSave = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply' }, _('Save & Apply'));
 
 			btnPrev.addEventListener('click', function() { goTo(currentStep - 1); });
 			btnNext.addEventListener('click', function() { goTo(currentStep + 1); });
@@ -1062,7 +1079,7 @@ return view.extend({
 
 					servers.push({
 						name: sid,
-						ips: L.toArray(uci.get('openmptcprouter', sid, 'ip')).filter(Boolean),
+						ips: uniqueValues(uci.get('openmptcprouter', sid, 'ip')),
 						password: uci.get('openmptcprouter', sid, 'password') || '',
 						username: uci.get('openmptcprouter', sid, 'username') || 'openmptcprouter',
 						disabled: uci.get('openmptcprouter', sid, 'disabled') || '0'
