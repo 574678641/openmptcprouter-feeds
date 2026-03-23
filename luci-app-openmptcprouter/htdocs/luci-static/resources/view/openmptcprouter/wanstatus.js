@@ -119,8 +119,9 @@ return view.extend({
 		var statusMessage = '';
 		if (!wan.ipaddr && !wan.ip6addr) statusMessage += _('No IP defined') + '<br />';
 		if (!wan.gateway && !wan.gateway6) statusMessage += _('No gateway defined') + '<br />';
-		if (wan.gateway && wan.gw_ping === 'DOWN') statusMessage += _('Gateway DOWN') + '<br />';
-		if (wan.ip6addr && wan.gateway6 && wan.gw_ping6 === 'DOWN') statusMessage += _('Gateway IPv6 DOWN') + '<br />';
+		var noGwCheck = /^(modemmanager|qmi|mbim|3g)$/i.test(wan.proto || '');
+		if (!noGwCheck && wan.gateway && wan.gw_ping === 'DOWN') statusMessage += _('Gateway DOWN') + '<br />';
+		if (!noGwCheck && wan.ip6addr && wan.gateway6 && wan.gw_ping6 === 'DOWN') statusMessage += _('Gateway IPv6 DOWN') + '<br />';
 		if (wan.server_ping === 'DOWN') statusMessage += _('No Server ping response after 1 second') + '<br />';
 		if (wan.server_http === 'DOWN') statusMessage += _('No Server http response after 1 second') + '<br />';
 		if (wan.zonewan === 'NO') statusMessage += _('Network interface not in WAN firewall zone') + '<br />';
@@ -221,6 +222,9 @@ return view.extend({
 		if (!c) return;
 		var d = data || {};
 		var omr = d.openmptcprouter || {};
+
+		if (!omr.hostname && !omr.local_addr && !d.wans) return;
+
 		var wans = d.wans || [];
 		var tunnels = d.tunnels || [];
 		var anonymize = this.getCookie('anonymize') === 'true';
@@ -249,12 +253,13 @@ return view.extend({
 		if (omr.vps_status === 'DOWN') serverStatus += _('Can\'t ping server') + '<br />';
 		var serverDetails = '';
 		if (omr.vps_omr_version) serverDetails += _('Version') + ' ' + this.esc(omr.vps_omr_version) + '<br />';
+		if (omr.vps_kernel) serverDetails += _('Kernel:') + ' ' + this.esc(omr.vps_kernel) + '<br />';
 		if (omr.vps_loadavg) serverDetails += _('Load:') + ' ' + this.esc(omr.vps_loadavg) + '<br />';
 		if (omr.vps_uptime) serverDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.vps_uptime)) + '<br />';
 		if (omr.proxy) serverDetails += _('Proxy:') + ' ' + this.esc(omr.proxy) + '<br />';
-		if (omr.proxy_traffic) serverDetails += _('Proxy traffic:') + ' ' + this.formatBytes(omr.proxy_traffic) + '<br />';
-		if (omr.vpn_traffic) serverDetails += _('VPN traffic:') + ' ' + this.formatBytes(omr.vpn_traffic) + '<br />';
-		if (omr.total_traffic) serverDetails += _('Total traffic:') + ' ' + this.formatBytes(omr.total_traffic) + '<br />';
+		if (omr.proxy_traffic != null) serverDetails += _('Proxy traffic:') + ' ' + this.formatBytes(omr.proxy_traffic) + '<br />';
+		if (omr.vpn_traffic != null) serverDetails += _('VPN traffic:') + ' ' + this.formatBytes(omr.vpn_traffic) + '<br />';
+		if (omr.total_traffic != null) serverDetails += _('Total traffic:') + ' ' + this.formatBytes(omr.total_traffic) + '<br />';
 
 		var temp = '<figure class="tree"><ul>';
 		temp += '<li class="remote-from-lease"><a href="#">' +
