@@ -51,7 +51,7 @@ _add_proto() {
 			echo "$protoname:$url" >/proc/net/xt_ndpi/host_proto
 		fi
 	done
-	ip=$(uci -q get omr-bypass.$protoname.ip)
+	ips=$(uci -q get omr-bypass.$protoname.ip)
 	for ip in $ips; do
 		if ! echo "$allurls" | grep -qi "^${protoname}:.*${ip}"; then
 			echo "$protoname:$ip" >/proc/net/xt_ndpi/ip_proto
@@ -70,7 +70,7 @@ _bypass_ip() {
 	local type=$2
 	local tcpudp=$3
 	[ -z "$type" ] && type="all"
-	[ -z "$tcpudp" ] && type="all"
+	[ -z "$tcpudp" ] && tcpudp="all"
 	valid_ip4=$( valid_subnet4 $ip)
 	valid_ip6=$( valid_subnet6 $ip)
 	if [ "$tcpudp" = "all" ]; then
@@ -175,7 +175,7 @@ _bypass_domain() {
 	if [ -n "$domain" ]; then
 		domain=$(echo $domain | sed 's:^\.::')
 		#logger -t "omr-bypass" "Get IPs of $domain..."
-		if [ -z $RELOAD ]; then
+		if [ -z "$RELOAD" ]; then
 			resolve=$(dig a +timeout=1 +tries=1 +nocmd +noall +answer $domain | grep -v CNAME | awk '{print $5}')
 			for ip in $resolve; do
 				_bypass_ip $ip $intf $tcpudp
@@ -187,7 +187,7 @@ _bypass_domain() {
 				done
 			fi
 		fi
-		if ! uci -q get dhcp.omr_dst_bypass_${intf}.domain | grep -qw "$domain"; then
+		if ! uci -q get dhcp.omr_dst_bypass_${intf}.domain 2>/dev/null| grep -qw "$domain"; then
 			uci -q add_list dhcp.omr_dst_bypass_${intf}.domain="$domain"
 			uci -q set firewall.omr_dst_bypass_${intf}_4.enabled='1'
 			add_domains="true"
@@ -482,7 +482,7 @@ _bypass_proto_without_ndpi() {
 	[ -z "$intf" ] && intf="all"
 	[ "$intf" = "all" ] && intfid=""
 	[ -z "$proto" ] && return
-	if [ "$_omr_ndpi" = "0" ] || [ "$ndpi" == "0" ] || [ "$vpn" = "1" ]; then
+	if [ "$_omr_ndpi" = "0" ] || [ "$ndpi" = "0" ] || [ "$vpn" = "1" ]; then
 		ALLIPS=$(sqlite3 /usr/share/omr-bypass/omr-bypass.db "select ip from ipproto where proto=\"$proto\";" ".exit")
 		if [ -n "$ALLIPS" ]; then
 			uci -q batch <<-EOF >/dev/null
