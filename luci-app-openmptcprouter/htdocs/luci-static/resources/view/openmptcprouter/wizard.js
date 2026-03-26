@@ -204,7 +204,9 @@ return view.extend({
 			callFileExec('/bin/sh', ['-c', 'grep -q aes /proc/cpuinfo && echo -n 1 || echo -n 0']),
 			callFileExec('/bin/sh', ['-c', 'ls /dev/ttyUSB* 2>/dev/null || true']),
 			callFileExec('/bin/sh', ['-c', 'ls /dev/cdc-wdm* 2>/dev/null || true']),
-			callFileExec('/bin/sh', ['-c', 'timeout 1 /usr/bin/mmcli -L 2>/dev/null || true'])
+			callFileExec('/bin/sh', ['-c', 'timeout 1 /usr/bin/mmcli -L 2>/dev/null || true']),
+		uci.load('mqvpn').catch(function(){}),
+		fileExists('/usr/sbin/mqvpn')
 		]);
 	},
 
@@ -217,7 +219,8 @@ return view.extend({
 			openvpnBond: data[26], softether: data[27], wg: data[28],
 			sqm: (data[29]||'').trim() === '1',
 			qos: (data[30]||'').trim() === '1',
-			aes: (data[31]||'').trim() === '1'
+			aes: (data[31]||'').trim() === '1',
+			mqvpn: data[36]
 		};
 		var ttyUSB = (data[32]||'').trim().split('\n').filter(Boolean);
 		var ttyCdc = (data[33]||'').trim().split('\n').filter(Boolean);
@@ -362,6 +365,7 @@ return view.extend({
 		if (has.xray)    m.chain('xray');
 		if (has.glorytun || has.glorytunUdp) m.chain('glorytun');
 		if (has.dsvpn)   m.chain('dsvpn');
+		if (has.mqvpn)   m.chain('mqvpn');
 		if (has.mlvpn)   m.chain('mlvpn');
 		if (has.ubond)   m.chain('ubond');
 		if (has.softether) m.chain('softethervpn');
@@ -542,6 +546,7 @@ return view.extend({
 		var vpnKeyOpts = [
 			[has.glorytun||has.glorytunUdp, '_glorytun_key', _('Glorytun key'),          'glorytun',      'vpn',              'key'],
 			[has.dsvpn,                     '_dsvpn_key',    _('A Dead Simple VPN key'), 'dsvpn',         'vpn',              'key'],
+			[has.mqvpn,                     '_mqvpn_key',    _('MQVPN key'),             'mqvpn',         'auth',             'key'],
 			[has.mlvpn,                     '_mlvpn_pw',     _('MLVPN password'),        'mlvpn',         'general',          'password'],
 			[has.ubond,                     '_ubond_pw',     _('UBOND password'),        'ubond',         'general',          'password'],
 			[has.softether,                 '_softether_pw', _('SoftEther VPN password'),'softethervpn',  'openmptcprouter',  'password']
@@ -563,6 +568,7 @@ return view.extend({
 			'glorytun_tcp':    ['Glorytun TCP',      has.glorytun],
 			'glorytun_udp':    ['Glorytun UDP',      has.glorytunUdp],
 			'dsvpn':           ['A Dead Simple VPN',  has.dsvpn],
+			'mqvpn':           ['MQVPN',             has.mqvpn],
 			'mlvpn':           ['MLVPN',             has.mlvpn],
 			'ubond':           ['UBOND',             has.ubond],
 			'openvpn':         ['OpenVPN TCP',       has.openvpn],

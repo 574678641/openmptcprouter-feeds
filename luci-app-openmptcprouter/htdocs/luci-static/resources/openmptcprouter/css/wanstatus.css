@@ -36,7 +36,7 @@ ul { margin: 0; padding: 0; }
 .tree {
   display: flex;
   align-items: flex-start;
-  justify-content: center;   /* centre l'arbre horizontalement */
+  justify-content: center;
 }
 
 .tree ul {
@@ -104,7 +104,7 @@ ul { margin: 0; padding: 0; }
 .tree li a:hover { text-decoration: none; }
 
 /* ── Special node exceptions ──────────────────────────────────── */
-/* Top-level items stack vertically (Vous above, then router+WANs) */
+/* Top-level items stack vertically */
 .tree li.remote-from-lease,
 .tree li#networkRootNode {
   float: none;

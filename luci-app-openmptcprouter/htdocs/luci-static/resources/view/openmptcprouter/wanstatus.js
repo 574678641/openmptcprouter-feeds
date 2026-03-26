@@ -257,9 +257,9 @@ return view.extend({
 		if (omr.vps_loadavg) serverDetails += _('Load:') + ' ' + this.esc(omr.vps_loadavg) + '<br />';
 		if (omr.vps_uptime) serverDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.vps_uptime)) + '<br />';
 		if (omr.proxy) serverDetails += _('Proxy:') + ' ' + this.esc(omr.proxy) + '<br />';
-		if (omr.proxy_traffic != null) serverDetails += _('Proxy traffic:') + ' ' + this.formatBytes(omr.proxy_traffic) + '<br />';
-		if (omr.vpn_traffic != null) serverDetails += _('VPN traffic:') + ' ' + this.formatBytes(omr.vpn_traffic) + '<br />';
-		if (omr.total_traffic != null) serverDetails += _('Total traffic:') + ' ' + this.formatBytes(omr.total_traffic) + '<br />';
+		if (omr.proxy_traffic != null && omr.proxy_traffic != 0) serverDetails += _('Proxy traffic:') + ' ' + this.formatBytes(omr.proxy_traffic) + '<br />';
+		if (omr.vpn_traffic != null && omr.vpn_traffic != 0) serverDetails += _('VPN traffic:') + ' ' + this.formatBytes(omr.vpn_traffic) + '<br />';
+		if (omr.total_traffic != null && omr.total_traffic != 0) serverDetails += _('Total traffic:') + ' ' + this.formatBytes(omr.total_traffic) + '<br />';
 
 		var temp = '<figure class="tree"><ul>';
 		temp += '<li class="remote-from-lease"><a href="#">' +
