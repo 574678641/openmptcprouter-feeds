@@ -278,6 +278,10 @@ function default_vpn(default_vpn)
 		vpn_port = 65301
 		vpn_intf = "tun0"
 		ucic:set("network","omrvpn","proto","dhcp")
+	elseif default_vpn == "mqvpn" then
+		vpn_port = 65443
+		vpn_intf = "mqvpn0"
+		ucic:set("network","omrvpn","proto","dhcp")
 	end
 	if vpn_intf ~= "" then
 		ucic:set("network","omrvpn","device",vpn_intf)
@@ -309,6 +313,11 @@ function default_vpn(default_vpn)
 	else
 		ucic:set("openvpn","omr","enabled",0)
 	end
+	if default_vpn == "mqvpn" then
+		ucic:set("mqvpn","settings","enable",1)
+	else
+		ucic:set("mqvpn","settings","enable",0)
+	end
 	ucic:set("openmptcprouter","settings","vpn",default_vpn)
 	ucic:save("glorytun")
 	ucic:commit("glorytun")
@@ -318,6 +327,8 @@ function default_vpn(default_vpn)
 	ucic:commit("dsvpn")
 	ucic:save("openvpn")
 	ucic:commit("openvpn")
+	ucic:save("mqvpn")
+	ucic:commit("mqvpn")
 	ucic:save("openmptcprouter")
 	ucic:commit("openmptcprouter")
 	ucic:save("network")
@@ -338,6 +349,8 @@ function server_settings(server,server_ip,openmptcprouter_vps_key)
 		ucic:set("glorytun","vpn","host",server_ip)
 		ucic:set("dsvpn","vpn","host",server_ip)
 		ucic:set("mlvpn","general","host",server_ip)
+		local mqvpn_port = "65443"
+		ucic:set("mqvpn","server","address",server_ip .. ":" .. mqvpn_port)
 		sys.exec("uci -q del openvpn.omr.remote")
 		sys.exec("uci -q add_list openvpn.omr.remote=" .. server_ip)
 		ucic:set("qos","serverin","srchost",server_ip)
@@ -362,6 +375,8 @@ function server_settings(server,server_ip,openmptcprouter_vps_key)
 		ucic:commit("xray")
 		ucic:save("glorytun")
 		ucic:commit("glorytun")
+		ucic:save("mqvpn")
+		ucic:commit("mqvpn")
 		ucic:save("shadowsocks-libev")
 		ucic:commit("shadowsocks-libev")
 		ucic:save("shadowsocks-rust")
@@ -417,6 +432,13 @@ function set_openvpn(openvpn_key)
 	ucic:set("openvpn","omr","secret",openvpn_key_path)
 	ucic:save("openvpn")
 	ucic:commit("openvpn")
+end
+
+function set_mqvpn(mqvpn_key)
+	-- Set mqvpn auth key
+	ucic:set("mqvpn","auth","key",mqvpn_key)
+	ucic:save("mqvpn")
+	ucic:commit("mqvpn")
 end
 
 local function _as_string(v, default)
@@ -487,6 +509,16 @@ local function _unique_string_list(values)
 	return list
 end
 
+local function valid_ipv4(ip)
+	if type(ip) ~= "string" or ip == "" then return false end
+	local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+	if not a then return false end
+	a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+	return a <= 255 and b <= 255 and c <= 255 and d <= 255
+		and not (a == 0 and b == 0 and c == 0 and d == 0)
+		and a ~= 127
+end
+
 function wizard_add(args)
 	local interfaces = _parse_json_table(args.interfaces)
 	local servers = _parse_json_table(args.servers)
@@ -548,6 +580,10 @@ function wizard_add(args)
 
 	if _as_string(args.mlvpn_password, "") ~= "" then
 		set_mlvpn(_as_string(args.mlvpn_password, ""))
+	end
+
+	if _as_string(args.mqvpn_key, "") ~= "" then
+		set_mqvpn(_as_string(args.mqvpn_key, ""))
 	end
 
 	if _as_string(args.ula, "") ~= "" then
@@ -827,10 +863,11 @@ function restart_all()
 	sys.exec("/etc/init.d/vnstat restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/v2ray restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/xray restart >/dev/null 2>/dev/null")
+	sys.exec("/etc/init.d/mqvpn restart >/dev/null 2>/dev/null")
 end
 
 function restart_all_async()
-	sys.exec("sh -c '(sleep 1; /etc/init.d/macvlan restart; /bin/ubus call network reload; /etc/init.d/omr-tracker stop; /etc/init.d/mptcp restart; /etc/init.d/shadowsocks-libev restart; /etc/init.d/glorytun restart; /etc/init.d/glorytun-udp restart; /etc/init.d/mlvpn restart; /etc/init.d/openvpn restart; /etc/init.d/openvpnbonding restart; /etc/init.d/dsvpn restart; /etc/init.d/omr-tracker start; /etc/init.d/omr-6in4 restart; /etc/init.d/mptcpovervpn restart; /etc/init.d/vnstat restart; /etc/init.d/v2ray restart; /etc/init.d/xray restart) >/dev/null 2>/dev/null &'")
+	sys.exec("sh -c '(sleep 1; /etc/init.d/macvlan restart; /bin/ubus call network reload; /etc/init.d/omr-tracker stop; /etc/init.d/mptcp restart; /etc/init.d/shadowsocks-libev restart; /etc/init.d/glorytun restart; /etc/init.d/glorytun-udp restart; /etc/init.d/mlvpn restart; /etc/init.d/openvpn restart; /etc/init.d/openvpnbonding restart; /etc/init.d/dsvpn restart; /etc/init.d/mqvpn restart; /etc/init.d/omr-tracker start; /etc/init.d/omr-6in4 restart; /etc/init.d/mptcpovervpn restart; /etc/init.d/vnstat restart; /etc/init.d/v2ray restart; /etc/init.d/xray restart) >/dev/null 2>/dev/null &'")
 end
 
 function apply_settings_async()
@@ -1180,8 +1217,11 @@ function interfaces_status()
 		end
 		if external_check ~= "0" then
 			mArray.openmptcprouter["wan_addr"] = ut.trim(sys.exec("curl -4 -s -m " .. timeout .. " " .. check_ipv4_website))
-			if mArray.openmptcprouter["wan_addr"] == "" then
+			if not valid_ipv4(mArray.openmptcprouter["wan_addr"]) then
 				mArray.openmptcprouter["wan_addr"] = ut.trim(sys.exec("dig -4 TXT +timeout=" .. timeout .. " +tries=1 +short o-o.myaddr.l.google.com @ns1.google.com | awk -F'\"' '{print $2}'"))
+			end
+			if not valid_ipv4(mArray.openmptcprouter["wan_addr"]) then
+				mArray.openmptcprouter["wan_addr"] = ""
 			end
 			if mArray.openmptcprouter["ipv6"] == "enabled" or (mArray.openmptcprouter["service_addr_ip6"] ~= "" and mArray.openmptcprouter["service_addr_ip6"] ~= nil) then
 				mArray.openmptcprouter["wan_addr6"] = uci:get("openmptcprouter","omr","public_detected_ipv6") or ""
@@ -1372,7 +1412,8 @@ function interfaces_status()
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?dsvpn?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mlvpn?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?openvpn?$'"), "%d+") or
-	   string.find(sys.exec("/usr/bin/pgrep '^(/var/softethervpn/)?vpnclient?$'"), "%d+") then
+	   string.find(sys.exec("/usr/bin/pgrep '^(/var/softethervpn/)?vpnclient?$'"), "%d+") or
+	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mqvpn$'"), "%d+") then
 		mArray.openmptcprouter["tun_service"] = true
 		mArray.openmptcprouter["tun_ip"] = get_ip("omrvpn")
 		local tun_dev = uci:get("network","omrvpn","device") or ""
@@ -1421,7 +1462,8 @@ function interfaces_status()
 			{"dsvpn", "vpn", "dsvpn"},
 			{"mlvpn", "general", "mlvpn"},
 			{"openvpn", "omr", "openvpn"},
-			{"softethervpn", "openmptcprouter", "softether"}
+			{"softethervpn", "openmptcprouter", "softether"},
+			{"mqvpn", "settings", "mqvpn"}
 		}
 		for _, v in ipairs(vpn_checks) do
 			if uci:get(v[1], v[2], "enable") == "1" and current_vpn ~= v[3] then
@@ -1691,7 +1733,7 @@ function interfaces_status()
 		end
 
 		local latency, server_ping, server_http = "", "", ""
-		if ifname ~= "" and (gateway ~= "" or gateway6 ~= "") and (ipaddr ~= "" or ip6addr ~= "") and connectivity ~= "ERROR" then
+		if ifname ~= "" and (gateway ~= "" or gateway6 ~= "") and (ipaddr ~= "" or ip6addr ~= "") then
 			if uci:get("openmptcprouter","settings","disableserverping") ~= "1" then
 				uci:foreach("openmptcprouter", "server", function(s)
 					local serverips = uci:get("openmptcprouter",s[".name"],"ip") or { "" }
@@ -1811,6 +1853,39 @@ function interfaces_status()
 		end
 		if state == "down" then connectivity = "ERROR" end
 
+		-- Enrich with omr-metrics data if available (omr-metrics package is optional)
+		local loss, jitter = "", ""
+		local signal_rssi, signal_rsrp, signal_rsrq, signal_sinr = "", "", "", ""
+		local wifi_ssid, wifi_channel, wifi_bitrate, wifi_signal, wifi_noise = "", "", "", "", ""
+		local mdata = ut.ubus("metrics", "get_status", { interface = interface })
+		if mdata and not mdata.error then
+			loss   = tostring(mdata.loss   or "")
+			jitter = tostring(mdata.jitter or "")
+			if latency == "" and mdata.latency then
+				latency = tostring(mdata.latency)
+			end
+			local msig = mdata.signal or {}
+			if signal == "" and msig.quality then
+				signal = tostring(msig.quality)
+			end
+			if operator == "" and msig.operator then
+				operator = tostring(msig.operator)
+			end
+			if networktype == "" and msig.type then
+				networktype = tostring(msig.type)
+			end
+			signal_rssi = tostring(msig.rssi or "")
+			signal_rsrp = tostring(msig.rsrp or "")
+			signal_rsrq = tostring(msig.rsrq or "")
+			signal_sinr = tostring(msig.sinr or "")
+			local mwifi = mdata.wifi or {}
+			wifi_ssid    = tostring(mwifi.ssid    or "")
+			wifi_channel = tostring(mwifi.channel or "")
+			wifi_bitrate = tostring(mwifi.bitrate or "")
+			wifi_signal  = tostring(mwifi.signal  or "")
+			wifi_noise   = tostring(mwifi.noise   or "")
+		end
+
 		local data = {
 			label = section["label"] or interface,
 			name = interface, ifname = ifname,
@@ -1835,6 +1910,12 @@ function interfaces_status()
 			proto = proto, rx = rx, tx = tx,
 			zonewan = zonewan, iftype = itype,
 			state = state, loop = loop,
+			loss = loss, jitter = jitter,
+			signal_rssi = signal_rssi, signal_rsrp = signal_rsrp,
+			signal_rsrq = signal_rsrq, signal_sinr = signal_sinr,
+			wifi_ssid = wifi_ssid, wifi_channel = wifi_channel,
+			wifi_bitrate = wifi_bitrate, wifi_signal = wifi_signal,
+			wifi_noise = wifi_noise,
 		}
 		if ifname ~= nil and (ifname:match("^tun.*") or ifname:match("^mlvpn.*")) then
 			table.insert(mArray.tunnels, data)
@@ -2095,6 +2176,39 @@ function interfaces_only_status()
 		end
 		if state == "down" then connectivity = "ERROR" end
 
+		-- Enrich with omr-metrics data if available (omr-metrics package is optional)
+		local loss, jitter = "", ""
+		local signal_rssi, signal_rsrp, signal_rsrq, signal_sinr = "", "", "", ""
+		local wifi_ssid, wifi_channel, wifi_bitrate, wifi_signal, wifi_noise = "", "", "", "", ""
+		local mdata = ut.ubus("metrics", "get_status", { interface = interface })
+		if mdata and not mdata.error then
+			loss   = tostring(mdata.loss   or "")
+			jitter = tostring(mdata.jitter or "")
+			if latency == "" and mdata.latency then
+				latency = tostring(mdata.latency)
+			end
+			local msig = mdata.signal or {}
+			if signal == "" and msig.quality then
+				signal = tostring(msig.quality)
+			end
+			if operator == "" and msig.operator then
+				operator = tostring(msig.operator)
+			end
+			if networktype == "" and msig.type then
+				networktype = tostring(msig.type)
+			end
+			signal_rssi = tostring(msig.rssi or "")
+			signal_rsrp = tostring(msig.rsrp or "")
+			signal_rsrq = tostring(msig.rsrq or "")
+			signal_sinr = tostring(msig.sinr or "")
+			local mwifi = mdata.wifi or {}
+			wifi_ssid    = tostring(mwifi.ssid    or "")
+			wifi_channel = tostring(mwifi.channel or "")
+			wifi_bitrate = tostring(mwifi.bitrate or "")
+			wifi_signal  = tostring(mwifi.signal  or "")
+			wifi_noise   = tostring(mwifi.noise   or "")
+		end
+
 		local data = {
 			label = section["label"] or interface,
 			name = interface, ifname = ifname,
@@ -2118,6 +2232,12 @@ function interfaces_only_status()
 			proto = proto, rx = rx, tx = tx,
 			zonewan = zonewan, iftype = itype,
 			state = state, loop = loop,
+			loss = loss, jitter = jitter,
+			signal_rssi = signal_rssi, signal_rsrp = signal_rsrp,
+			signal_rsrq = signal_rsrq, signal_sinr = signal_sinr,
+			wifi_ssid = wifi_ssid, wifi_channel = wifi_channel,
+			wifi_bitrate = wifi_bitrate, wifi_signal = wifi_signal,
+			wifi_noise = wifi_noise,
 		}
 		table.insert(mArray.wans, data)
 	end)
