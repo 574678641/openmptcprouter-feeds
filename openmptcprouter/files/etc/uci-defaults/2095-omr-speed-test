@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Migrate speed test URLs from openmptcprouter.settings to omr-speedtest config
+[ -z "$(uci -q get openmptcprouter.settings.speed_test_urls)" ] && exit 0
+
+uci -q batch <<-EOF >/dev/null
+	del openmptcprouter.settings.speed_test_urls
+	del openmptcprouter.settings.speed_test_urls6
+	commit openmptcprouter
+EOF
+
+exit 0
