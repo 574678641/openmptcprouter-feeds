@@ -335,6 +335,51 @@ function default_vpn(default_vpn)
 	ucic:commit("network")
 end
 
+function default_proxy(proxy)
+	-- Enable/disable proxy services based on selection
+	local is_ss_libev  = (proxy == "shadowsocks")
+	local is_ss_rust   = (proxy == "shadowsocks-rust" or proxy == "shadowsocks-go")
+	local is_v2ray     = (proxy:match("^v2ray.*") ~= nil)
+	local is_xray      = (proxy:match("^xray.*") ~= nil)
+
+	-- shadowsocks-libev: disabled flag on sss0
+	if ucic:get("shadowsocks-libev","sss0") ~= nil then
+		ucic:set("shadowsocks-libev","sss0","disabled", is_ss_libev and "0" or "1")
+		ucic:save("shadowsocks-libev")
+		ucic:commit("shadowsocks-libev")
+	end
+
+	-- shadowsocks-rust: disabled flag on each server section and ss_rules
+	if ucic:get("shadowsocks-rust","sss0") ~= nil then
+		ucic:foreach("shadowsocks-rust", "server", function(s)
+			ucic:set("shadowsocks-rust", s[".name"], "disabled", is_ss_rust and "0" or "1")
+		end)
+		if ucic:get("shadowsocks-rust","ss_rules") ~= nil then
+			ucic:set("shadowsocks-rust","ss_rules","disabled", is_ss_rust and "0" or "1")
+		end
+		ucic:save("shadowsocks-rust")
+		ucic:commit("shadowsocks-rust")
+	end
+
+	-- v2ray: enabled flag on main section
+	if ucic:get("v2ray","main") ~= nil then
+		ucic:set("v2ray","main","enabled", is_v2ray and "1" or "0")
+		ucic:save("v2ray")
+		ucic:commit("v2ray")
+	end
+
+	-- xray: enabled flag on main section
+	if ucic:get("xray","main") ~= nil then
+		ucic:set("xray","main","enabled", is_xray and "1" or "0")
+		ucic:save("xray")
+		ucic:commit("xray")
+	end
+
+	ucic:set("openmptcprouter","settings","proxy",proxy)
+	ucic:save("openmptcprouter")
+	ucic:commit("openmptcprouter")
+end
+
 function server_settings(server,server_ip,openmptcprouter_vps_key)
 	-- OpenMPTCProuter VPS
 	ucic:set("openmptcprouter",server,"server")
@@ -590,7 +635,9 @@ function wizard_add(args)
 		ucic:set("network", "globals", "ula_prefix", _as_string(args.ula, ""))
 	end
 
-	_set_or_delete("openmptcprouter", "settings", "proxy", _as_string(args.default_proxy, ""))
+	if _as_string(args.default_proxy, "") ~= "" then
+		default_proxy(_as_string(args.default_proxy, "shadowsocks-rust"))
+	end
 	_set_or_delete("openmptcprouter", "settings", "encryption", _as_string(args.encryption, ""))
 	_set_or_delete("openmptcprouter", "settings", "mptcpovervpn", _as_string(args.mptcpovervpn_vpn, ""))
 	_set_or_delete("openmptcprouter", "settings", "country", _as_string(args.country, ""))
