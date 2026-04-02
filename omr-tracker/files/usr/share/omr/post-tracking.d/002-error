@@ -169,8 +169,8 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		fi
 		if [ -n "$OMR_TRACKER_INTERFACE" ] && [ "$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.vpn)" = "1" ] && [ "$(uci -q get openmptcprouter.settings.mptcpovervpn)" = "openvpn" ]; then
 			VPN_BASE_INTF="$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.baseintf)"
-			VPN_BASE_INTF_IP=$(ubus call network.interface.$VPN_BASE_INTF status | jsonfilter -e '@["ipv4-address"][0].address' | tr -d "\n")
 			if [ -n "$VPN_BASE_INTF" ]; then
+				VPN_BASE_INTF_IP=$(ubus call network.interface.$VPN_BASE_INTF status | jsonfilter -e '@["ipv4-address"][0].address' | tr -d "\n")
 				uci -q batch <<-EOF >/dev/null
 					set openvpn.$VPN_BASE_INTF.local="$VPN_BASE_INTF_IP"
 					commit openvpn
@@ -187,7 +187,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		if [ -n "$OMR_TRACKER_INTERFACE" ]; then
 			default_gw=$(ip route get 1.1.1.1 | grep via | awk '{print $3}')
 			default_gw6=$(ip -6 route get 2606:4700:4700::1111 | grep via | awk '{print $3}')
-			if { [ "$default_gw" = "$OMR_TRACKER_DEVICE_GATEWAY" ] || [ "$default_gw" = "" ] || [ "$default_gw6" != "$OMR_TRACKER_DEVICE_GATEWAY6" ]; } && [ "$(uci -q get openmptcprouter.settings.defaultgw)" != "0" ]; then
+			if { [ "$default_gw" = "$OMR_TRACKER_DEVICE_GATEWAY" ] || [ "$default_gw" = "" ] || [ "$default_gw6" = "$OMR_TRACKER_DEVICE_GATEWAY6" ]; } && [ "$(uci -q get openmptcprouter.settings.defaultgw)" != "0" ]; then
 				[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Default gw: $default_gw - Set routes (current: $(ip r) )"
 				config_load network
 				config_foreach set_route interface $OMR_TRACKER_INTERFACE
@@ -267,6 +267,10 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		if [ "$(uci -q get dsvpn.vpn.enable)" = "1" ]; then
 			_log "DSVPN down, restart it"
 			/etc/init.d/dsvpn restart >/dev/null 2>&1
+		fi
+		if [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
+			_log "mqvn down, restart it"
+			/etc/init.d/mqvpn restart >/dev/null 2>&1
 		fi
 		if [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
 			_log "MLVPN down, restart it"
