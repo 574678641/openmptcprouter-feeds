@@ -20,7 +20,8 @@ return L.view.extend({
 			this.callHostHints(),
 			L.resolveDefault(fs.read_direct('/proc/net/xt_ndpi/proto'), ''),
 			L.resolveDefault(fs.read_direct('/proc/net/xt_ndpi/host_proto'), ''),
-			fs.read_direct('/usr/share/omr-bypass/omr-bypass-proto.lst')
+			fs.read_direct('/usr/share/omr-bypass/omr-bypass-proto.lst'),
+			L.resolveDefault(fs.stat('/usr/sbin/ndpisrvd'), null)
 		]);
 	},
 
@@ -314,7 +315,7 @@ return L.view.extend({
 		o.default = true;
 		o.modalonly = true
 
-		if (testhosts[0]) {
+		if (testhosts[0] || testhosts[5]) {
 			o = s.option(form.Flag, 'ndpi', _('Enable ndpi'));
 			o.default = o.enabled;
 			o.modalonly = true

@@ -1097,6 +1097,89 @@ _delete_network_rules() {
 	esac
 }
 
+_bypass_proto_ndpid_list=""
+
+_bypass_proto_collect_ndpid() {
+	local proto intf enabled intfid tcpudp ndpi
+	config_get proto $1 proto
+	config_get intf $1 interface "all"
+	config_get enabled $1 enabled
+	config_get tcpudp $1 tcpudp "all"
+	config_get ndpi $1 ndpi "1"
+	[ "$enabled" = "0" ] && return
+	[ "$ndpi" = "0" ] && return
+	[ -z "$proto" ] && return
+	intf=$(echo "$intf" | sed 's/[.-]/_/g')
+	intfid=$(uci -q get omr-bypass.$intf.id)
+	[ "$intf" = "all" ] && intfid=""
+
+	# Ensure nftables sets and rules exist for this protocol (even if DB is empty)
+	if [ "$intf" = "all" ]; then
+		uci -q batch <<-EOF >/dev/null
+			set firewall.bypass_${proto}=ipset
+			set firewall.bypass_${proto}.name="bypass_${proto}"
+			set firewall.bypass_${proto}.match='dest_net'
+			set firewall.bypass_${proto}.family='ipv4'
+			set firewall.bypass_${proto}.enabled='1'
+			set firewall.bypass6_${proto}=ipset
+			set firewall.bypass6_${proto}.name="bypass6_${proto}"
+			set firewall.bypass6_${proto}.match='dest_net'
+			set firewall.bypass6_${proto}.family='ipv6'
+			set firewall.bypass6_${proto}.enabled='1'
+			commit firewall
+		EOF
+		for zone in $(_get_firewall_zones); do
+			uci -q batch <<-EOF >/dev/null
+				set firewall.bypass_${proto}_${zone}_rule=rule
+				set firewall.bypass_${proto}_${zone}_rule.name="bypass_${proto}_${zone}_rule"
+				set firewall.bypass_${proto}_${zone}_rule.src="${zone}"
+				set firewall.bypass_${proto}_${zone}_rule.proto="${tcpudp}"
+				set firewall.bypass_${proto}_${zone}_rule.dest='*'
+				set firewall.bypass_${proto}_${zone}_rule.family='ipv4'
+				set firewall.bypass_${proto}_${zone}_rule.target='MARK'
+				set firewall.bypass_${proto}_${zone}_rule.ipset="bypass_${proto}"
+				set firewall.bypass_${proto}_${zone}_rule.enabled='1'
+				set firewall.bypass_${proto}_${zone}_rule.set_xmark="0x4539${intfid}"
+				set firewall.bypass6_${proto}_${zone}_rule=rule
+				set firewall.bypass6_${proto}_${zone}_rule.name="bypass6_${proto}_${zone}_rule"
+				set firewall.bypass6_${proto}_${zone}_rule.src="${zone}"
+				set firewall.bypass6_${proto}_${zone}_rule.family='ipv6'
+				set firewall.bypass6_${proto}_${zone}_rule.dest='*'
+				set firewall.bypass6_${proto}_${zone}_rule.proto="${tcpudp}"
+				set firewall.bypass6_${proto}_${zone}_rule.target='MARK'
+				set firewall.bypass6_${proto}_${zone}_rule.set_xmark="0x6539${intfid}"
+				set firewall.bypass6_${proto}_${zone}_rule.ipset="bypass6_${proto}"
+				set firewall.bypass6_${proto}_${zone}_rule.enabled='1'
+				commit firewall
+			EOF
+		done
+		_intf_rules_all_rules "${proto}" "${intfid}" "${tcpudp}"
+	fi
+	_bypass_proto_ndpid_list="${_bypass_proto_ndpid_list} ${proto}:${intf}:${intfid}"
+}
+
+_start_ndpid_consumer() {
+	[ "$_omr_ndpid" != "1" ] && return
+	[ -z "$_bypass_proto_ndpid_list" ] && return
+
+	# Kill any existing consumer
+	if [ -f /var/run/omr-bypass-ndpid.pid ]; then
+		kill "$(cat /var/run/omr-bypass-ndpid.pid)" 2>/dev/null
+		rm -f /var/run/omr-bypass-ndpid.pid
+	fi
+
+	/usr/lib/omr-bypass/ndpid-consumer "$_bypass_proto_ndpid_list" &
+	logger -t "omr-bypass" "nDPId consumer started (PID: $!)"
+}
+
+_stop_ndpid_consumer() {
+	if [ -f /var/run/omr-bypass-ndpid.pid ]; then
+		kill "$(cat /var/run/omr-bypass-ndpid.pid)" 2>/dev/null
+		rm -f /var/run/omr-bypass-ndpid.pid
+		logger -t "omr-bypass" "nDPId consumer stopped"
+	fi
+}
+
 boot() {
 	BOOT=1
 	start "$@"
@@ -1125,9 +1208,11 @@ start_service() {
 		config_foreach _add_proto proto
 	}
 	disableipv6="$(uci -q get openmptcprouter.settings.disable_ipv6)"
-	# Cache proxy/VPN/ndpi state — read once, reused by _intf_rule and _bypass_proto (called per interface/proto)
+	# Cache proxy/VPN/ndpi/ndpid state — read once, reused by _intf_rule and _bypass_proto (called per interface/proto)
 	_omr_proxy=$(uci -q get openmptcprouter.settings.proxy)
 	_omr_ndpi=$(uci -q get openmptcprouter.settings.ndpi)
+	_omr_ndpid=0
+	[ -x /usr/sbin/ndpid ] && pidof ndpisrvd >/dev/null 2>&1 && _omr_ndpid=1
 	_ss_libev_disabled=$(uci -q get shadowsocks-libev.sss0.disabled)
 	_ss_rust_disabled=$(uci -q get shadowsocks-rust.sss0.disabled)
 	_v2ray_enabled=$(uci -q get v2ray.main.enabled)
@@ -1209,6 +1294,12 @@ start_service() {
 	config_load omr-bypass
 	[ -d /proc/net/xt_ndpi/proto ] && config_foreach _bypass_proto dpis
 	config_foreach _bypass_proto_without_ndpi dpis
+	if [ "$_omr_ndpid" = "1" ]; then
+		_bypass_proto_ndpid_list=""
+		config_load omr-bypass
+		config_foreach _bypass_proto_collect_ndpid dpis
+		_start_ndpid_consumer
+	fi
 	[ -n "$(uci -q changes network)" ] && {
 		uci -q commit network
 		/etc/init.d/network reload
@@ -1248,6 +1339,7 @@ start_service() {
 }
 
 stop_service() {
+	_stop_ndpid_consumer
 	# Rules for ndpi
 #	$IPTABLESSAVE --counters 2>/dev/null | grep -v omr-bypass | $IPTABLESRESTORE -w --counters 2>/dev/null
 #	$IP6TABLESSAVE --counters 2>/dev/null | grep -v omr-bypass6 | $IP6TABLESRESTORE -w --counters 2>/dev/null
@@ -1264,7 +1356,7 @@ stop_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger omr-bypass network firewall
+	procd_add_reload_trigger omr-bypass network firewall ndpid
 }
 
 reload_service() {
