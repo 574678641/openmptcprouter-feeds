@@ -240,6 +240,8 @@ return view.extend({
 		if (omr.version) routerDetails += _('Version') + ' ' + this.esc(omr.version) + '<br />';
 		if (omr.loadavg) routerDetails += _('Load:') + ' ' + this.esc(omr.loadavg) + '<br />';
 		if (omr.uptime) routerDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.uptime)) + '<br />';
+		if (omr.proxy) routerDetails += _('Proxy:') + ' ' + this.esc(omr.proxy) + '<br />';
+		if (omr.vpn) routerDetails += _('VPN:') + ' ' + this.esc(omr.vpn) + '<br />';
 		var routerWarn = '';
 		if (omr.dns === false) routerWarn += _('DNS issue: can\'t resolve hostname') + '<br />';
 		if (omr.tun_state === 'DOWN') routerWarn += _('VPN tunnel DOWN') + '<br />';
