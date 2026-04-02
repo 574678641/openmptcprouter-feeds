@@ -34,6 +34,24 @@ return view.extend({
 			return promise;
 		};
 
+		s.sectiontitle = function(section_id) {
+			return section_id;
+		};
+
+		s.renderSectionAdd = function(extra_class) {
+			var el = form.TypedSection.prototype.renderSectionAdd.apply(this, arguments);
+			var input = el.querySelector('.cbi-section-create-name');
+			if (input) {
+				var select = E('select', { 'class': 'cbi-section-create-name' });
+				select.appendChild(E('option', { 'value': '' }, _('-- select interface --')));
+				networks.forEach(function(n) {
+					select.appendChild(E('option', { 'value': n.getName() }, n.getName()));
+				});
+				input.parentNode.replaceChild(select, input);
+			}
+			return el;
+		};
+
 		o = s.option(form.Flag, 'enabled', _('Enable'));
 		o.rmempty = false;
 
