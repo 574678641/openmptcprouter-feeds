@@ -21,6 +21,8 @@ export OMR_TRACKER_SIZE
 export OMR_TRACKER_MAX_TTL
 export OMR_TRACKER_LOSS
 export OMR_TRACKER_JITTER
+export OMR_TRACKER_RTT_MIN
+export OMR_TRACKER_RTT_MAX
 export OMR_TRACKER_STATUS
 export OMR_TRACKER_STATUS_MSG
 export OMR_TRACKER_PREV_STATUS
@@ -210,8 +212,12 @@ _ping() {
 			if [ "$localip" = "yes" ]; then
 				latency=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($5)}')
 				jitter=$(echo "$ret" | awk -F/ '/rtt/ {printf "%.1f", $7}')
+				rtt_min=$(echo "$ret" | awk -F/ '/rtt/ {split($4,a,"= "); printf "%d", int(a[2])}')
+				rtt_max=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($6)}')
 				[ -n "$latency" ] && OMR_TRACKER_LATENCY="$latency"
 				[ -n "$jitter" ] && OMR_TRACKER_JITTER="$jitter"
+				[ -n "$rtt_min" ] && OMR_TRACKER_RTT_MIN="$rtt_min"
+				[ -n "$rtt_max" ] && OMR_TRACKER_RTT_MAX="$rtt_max"
 				OMR_TRACKER_LOSS="$loss"
 			fi
 			return 0
@@ -233,8 +239,12 @@ _ping() {
 				#latency=$(echo "$ret" | grep rtt | cut -d "/" -s -f5 | cut -d "." -f1 | tr -d '\n')
 				latency=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($5)}')
 				jitter=$(echo "$ret" | awk -F/ '/rtt/ {printf "%.1f", $7}')
+				rtt_min=$(echo "$ret" | awk -F/ '/rtt/ {split($4,a,"= "); printf "%d", int(a[2])}')
+				rtt_max=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($6)}')
 				[ -n "$latency" ] && OMR_TRACKER_LATENCY="$latency"
 				[ -n "$jitter" ] && OMR_TRACKER_JITTER="$jitter"
+				[ -n "$rtt_min" ] && OMR_TRACKER_RTT_MIN="$rtt_min"
+				[ -n "$rtt_max" ] && OMR_TRACKER_RTT_MAX="$rtt_max"
 				OMR_TRACKER_LOSS="$loss"
 			fi
 			return 0
@@ -305,6 +315,8 @@ while true; do
 	OMR_TRACKER_LATENCY=
 	OMR_TRACKER_LOSS=
 	OMR_TRACKER_JITTER=
+	OMR_TRACKER_RTT_MIN=
+	OMR_TRACKER_RTT_MAX=
 	#OMR_TRACKER_TIMEOUT=$((rto / 1000 + (rto % 1000 ? 1 : 0)))
 	OMR_TRACKER_LIST_HOSTS=""
 	OMR_TRACKER_DEVICE_GATEWAY=
