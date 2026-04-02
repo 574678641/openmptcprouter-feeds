@@ -1,5 +1,5 @@
 config bpftune 'config'
-    option enabled '1'
+    option enabled '0'
     option logging_stdout '0'
     # Taux d'apprentissage: 0 (~1%) à 4 (~25%), défaut: 4
     # Réduire cette valeur diminue la fréquence des ajustements et des messages
