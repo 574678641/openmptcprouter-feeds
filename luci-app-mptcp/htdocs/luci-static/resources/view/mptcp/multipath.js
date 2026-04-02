@@ -761,8 +761,8 @@ return view.extend({
 					if (i > 0) {
 						var dt = d[i][0] - d[i-1][0];
 						if (dt) {
-							st.dndata[itf].push(self._sma('dn_'+itf, 15, (d[i][1]-d[i-1][1])/dt));
-							st.updata[itf].push(self._sma('up_'+itf, 15, (d[i][3]-d[i-1][3])/dt));
+							st.dndata[itf].push(self._sma('dn_'+itf, 15, Math.max(0, (d[i][1]-d[i-1][1])/dt)));
+							st.updata[itf].push(self._sma('up_'+itf, 15, Math.max(0, (d[i][3]-d[i-1][3])/dt)));
 						}
 					}
 				}
@@ -782,8 +782,8 @@ return view.extend({
 					if (ti > 0) {
 						var tdt = totalSeries[ti][0] - totalSeries[ti - 1][0];
 						if (tdt) {
-							st.totalDn.push(self._sma('dn_total', 15, (totalSeries[ti][1] - totalSeries[ti - 1][1]) / tdt));
-							st.totalUp.push(self._sma('up_total', 15, (totalSeries[ti][3] - totalSeries[ti - 1][3]) / tdt));
+							st.totalDn.push(self._sma('dn_total', 15, Math.max(0, (totalSeries[ti][1] - totalSeries[ti - 1][1]) / tdt)));
+							st.totalUp.push(self._sma('up_total', 15, Math.max(0, (totalSeries[ti][3] - totalSeries[ti - 1][3]) / tdt)));
 						}
 					}
 				}
