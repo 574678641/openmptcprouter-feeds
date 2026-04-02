@@ -166,6 +166,7 @@ var wizardCSS = '\
 .omr-steps li.done .step-num{background:#28a745;color:#fff}\
 @media(max-width:600px){.omr-steps .step-label{display:none}.omr-steps .step-num{margin:0}}\
 .omr-panel{display:none}.omr-panel.active{display:block}\
+.omr-nav{display:flex;justify-content:flex-end}\
 .omr-nav button{min-width:110px}\
 ';
 
@@ -581,6 +582,17 @@ return view.extend({
 			if (d && d[1]) o.value(v, d[0]);
 		});
 		o.value('none', _('None'));
+
+		if (has.mqvpn) {
+			o = s.taboption('vpn', form.ListValue, '_mqvpn_scheduler', _('MQVPN scheduler'));
+			o.depends({ '_show_adv': '1', 'vpn': 'mqvpn' });
+			o.value('wlb',    _('Weighted Load Balancing'));
+			o.value('minrtt', _('Minimum RTT'));
+			o.default = 'wlb';
+			o.cfgvalue = function() { return uci.get('mqvpn', 'multipath', 'scheduler') || 'wlb'; };
+			o.write = function(sid, val) { uci.set('mqvpn', 'multipath', 'scheduler', val); };
+			o.remove = function() {};
+		}
 
 		// ── MPTCP over VPN ──
 		o = s.taboption('mptcpvpn', form.ListValue, 'mptcpovervpn', _('MPTCP over VPN'));
