@@ -24,12 +24,12 @@ if [ "$(pgrep -f mqvpn)" = "" ]; then
 	exit 0
 fi
 
-. /usr/share/omr/lib/common-post-tracking.sh
-
 mqvpn_path_exists() {
 	mqvpn-path list 2>/dev/null | grep -q "\"$OMR_TRACKER_DEVICE\""
 }
-
+if [ "$(uci -q get mqvpn.interface.route_via_server)" = "1" ]; then
+	ip route del 0.0.0.0/1 dev mqvpn0 2>/dev/null
+fi
 if [ "$OMR_TRACKER_STATUS" = "ERROR" ]; then
 	[ "$OMR_TRACKER_PREV_STATUS" = "$OMR_TRACKER_STATUS" ] && exit 0
 	if mqvpn_path_exists; then

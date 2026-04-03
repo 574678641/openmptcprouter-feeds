@@ -1,17 +1,15 @@
 #!/bin/bash
 #
-# Copyright (C) 2018-2023 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter
+# Copyright (C) 2018-2026 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
 # This script save settings for status page usage
 
-[ "$OMR_TRACKER_STATUS" = "ERROR" ] || [ -z "$OMR_TRACKER_INTERFACE" ] || [ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && exit 0
+{ [ "$OMR_TRACKER_STATUS" = "ERROR" ] || [ -z "$OMR_TRACKER_INTERFACE" ] || [ "$OMR_TRACKER_INTERFACE" = "omrvpn" ]; } && exit 0
 interface_up=$(ifstatus "$OMR_TRACKER_INTERFACE" 2>/dev/null | jsonfilter -q -e '@["up"]')
 [ "$interface_up" != "true" ] && exit 0
-
-. /usr/share/omr/lib/common-post-tracking.sh
 
 # Cache frequently reused values
 _now=$(date +"%s")
