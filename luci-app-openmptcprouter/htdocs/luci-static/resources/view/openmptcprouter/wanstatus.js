@@ -258,7 +258,6 @@ return view.extend({
 		if (omr.vps_kernel) serverDetails += _('Kernel:') + ' ' + this.esc(omr.vps_kernel) + '<br />';
 		if (omr.vps_loadavg) serverDetails += _('Load:') + ' ' + this.esc(omr.vps_loadavg) + '<br />';
 		if (omr.vps_uptime) serverDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.vps_uptime)) + '<br />';
-		if (omr.proxy) serverDetails += _('Proxy:') + ' ' + this.esc(omr.proxy) + '<br />';
 		if (omr.proxy_traffic != null && omr.proxy_traffic != 0) serverDetails += _('Proxy traffic:') + ' ' + this.formatBytes(omr.proxy_traffic) + '<br />';
 		if (omr.vpn_traffic != null && omr.vpn_traffic != 0) serverDetails += _('VPN traffic:') + ' ' + this.formatBytes(omr.vpn_traffic) + '<br />';
 		if (omr.total_traffic != null && omr.total_traffic != 0) serverDetails += _('Total traffic:') + ' ' + this.formatBytes(omr.total_traffic) + '<br />';
@@ -275,10 +274,24 @@ return view.extend({
 		temp += '<tr><td><a href="#" id="omr">' +
 			this.getNetworkNodeTemplate('<img src="' + L.resource('openmptcprouter.png') + '" />', routerTitle, routerWarn ? 'warning' : 'ok', routerWarn, routerDetails) +
 			'</a></td></tr>';
-		temp += '<tr><td><div class="vertdash"></div></td></tr>';
-		temp += '<tr><td><a href="' + L.url('admin/system/openmptcprouter/wizard') + '" id="omr-vps">' +
-			this.getNetworkNodeTemplate('<img src="' + L.resource('server.png') + '" />', serverTitle, serverStatus ? 'warning' : 'ok', serverStatus, serverDetails) +
-			'</a></td></tr>';
+		if (omr.direct_output) {
+			var directIp = omr.wan_addr || '';
+			if (anonymize && directIp && !this.testPrivateIP(directIp)) directIp = this.replaceLastNChars(directIp, 'x', 6);
+			var directDetails = directIp ? (_('ip address:') + ' <strong>' + this.esc(directIp) + '</strong><br />') : '';
+			temp += '<tr><td><div class="vertdash"></div></td></tr>';
+			temp += '<tr><td><span id="omr-direct">' +
+				this.getNetworkNodeTemplate('<img src="' + L.resource('computer.png') + '" />', _('Direct Output'), 'ok', '', directDetails) +
+				'</span></td></tr>';
+			temp += '<tr><td style="height:1em;"></td></tr>';
+			temp += '<tr><td><a href="' + L.url('admin/system/openmptcprouter/wizard') + '" id="omr-vps">' +
+				this.getNetworkNodeTemplate('<img src="' + L.resource('server.png') + '" />', serverTitle, serverStatus ? 'warning' : 'ok', serverStatus, serverDetails) +
+				'</a></td></tr>';
+		} else {
+			temp += '<tr><td><div class="vertdash"></div></td></tr>';
+			temp += '<tr><td><a href="' + L.url('admin/system/openmptcprouter/wizard') + '" id="omr-vps">' +
+				this.getNetworkNodeTemplate('<img src="' + L.resource('server.png') + '" />', serverTitle, serverStatus ? 'warning' : 'ok', serverStatus, serverDetails) +
+				'</a></td></tr>';
+		}
 		temp += '</table></td><td>';
 
 		if (wans.length || tunnels.length) {
