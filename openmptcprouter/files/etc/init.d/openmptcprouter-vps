@@ -655,9 +655,10 @@ _get_vps_config() {
 
 	mqvpn_port_tmp="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
 	[ -z "$mqvpn_port_tmp" ] && mqvpn_port_tmp="65443"
-	if [ -n "$(uci -q get mqvpn.server)" ] && [ "$(uci -q get mqvpn.server.address)" != "$vpsip:$mqvpn_port_tmp" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get mqvpn.server)" ] && { [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port_tmp" ]; } && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
-			set mqvpn.server.address="$vpsip:$mqvpn_port_tmp"
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port_tmp"
 			commit mqvpn
 		EOF
 		if [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
@@ -2177,7 +2178,8 @@ _set_config_from_vps() {
 	if [ -f /etc/init.d/mqvpn ] && [ -n "$(uci -q get mqvpn.auth)" ] && [ -n "$mqvpn_key" ] && \
 	   ( [ "$mqvpn_key" != "$(uci -q get mqvpn.auth.key)" ] || \
 	     [ "$mqvpn_user" != "$(uci -q get mqvpn.auth.user)" ] || \
-	     [ "$(uci -q get mqvpn.server.address)" != "$vpsip:$mqvpn_port" ] ); then
+	     [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || \
+	     [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port" ] ); then
 		mqvpn_state=0
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		if [ "$vpn" = "mqvpn" ]; then
@@ -2187,7 +2189,8 @@ _set_config_from_vps() {
 			set mqvpn.auth.key=$mqvpn_key
 			set mqvpn.auth.user=$mqvpn_user
 			set mqvpn.settings.enable=$mqvpn_state
-			set mqvpn.server.address="$vpsip:$mqvpn_port"
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port"
 			commit mqvpn
 		EOF
 		if [ -n "$(uci -q changes mqvpn)" ]; then

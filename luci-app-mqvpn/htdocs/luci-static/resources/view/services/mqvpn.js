@@ -21,8 +21,14 @@ return L.view.extend({
 		s = m.section(form.NamedSection, 'server', 'server', _('Server'));
 		s.addremove = false;
 
-		o = s.option(form.Value, 'address', _('Server address'));
-		o.description = _('Host:port of the MQVPN server (e.g. 203.0.113.1:443)');
+		o = s.option(form.Value, 'ip', _('Server IP'));
+		o.description = _('IPv4 or IPv6 address of the MQVPN server');
+		o.datatype = 'ipaddr';
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'port', _('Server port'));
+		o.datatype = 'port';
+		o.placeholder = '443';
 		o.rmempty = false;
 
 		o = s.option(form.Flag, 'insecure', _('Insecure TLS'));

@@ -16,7 +16,7 @@ CONF=/var/run/mqvpn.conf
 _bool() { [ "$1" = "1" ] && echo "true" || echo "false"; }
 
 generate_config() {
-	local enable address insecure key user
+	local enable address ip port server_address insecure key user
 	local tun_name log_level kill_switch reconnect reconnect_interval route_via_server no_routes
 	local control_port control_addr
 	local scheduler auto_wan
@@ -25,8 +25,41 @@ generate_config() {
 	config_get_bool enable settings enable 0
 	[ "$enable" = "0" ] && { logger -t mqvpn "mqvpn is disabled"; return 1; }
 
+	config_get ip server ip
+	config_get port server port
 	config_get address server address
 	config_get_bool insecure server insecure 1
+
+	# Backward compatibility: support old single address option while migrating.
+	if [ -z "$ip" ] && [ -n "$address" ]; then
+		case "$address" in
+			\[*\]:*)
+				ip="${address%\]:*}"
+				ip="${ip#[}"
+				[ -z "$port" ] && port="${address##*\]:}"
+				;;
+			*:* )
+				if echo "${address##*:}" | grep -Eq '^[0-9]+$'; then
+					ip="${address%:*}"
+					[ -z "$port" ] && port="${address##*:}"
+				else
+					ip="$address"
+				fi
+				;;
+			*)
+				ip="$address"
+				;;
+		esac
+	fi
+
+	[ -n "$ip" ] && ip="${ip#[}"
+	[ -n "$ip" ] && ip="${ip%]}"
+	[ -z "$port" ] && port='443'
+
+	server_address="$ip:$port"
+	case "$ip" in
+		*:* ) server_address="[$ip]:$port" ;;
+	esac
 
 	config_get key auth key
 	config_get user auth user
@@ -48,14 +81,14 @@ generate_config() {
 	dns_csv=''
 	config_list_foreach interface dns _append_dns_csv
 
-	[ -z "$address" ] && { logger -t mqvpn "No server address configured"; return 1; }
+	[ -z "$ip" ] && { logger -t mqvpn "No server IP configured"; return 1; }
 	[ -z "$key" ]     && { logger -t mqvpn "No auth key configured"; return 1; }
 
 	mkdir -p /var/run
 
 	{
 		echo '[Server]'
-		echo "Address = $address"
+		echo "Address = $server_address"
 		echo "Insecure = $(_bool "$insecure")"
 		echo ''
 		echo '[Auth]'
