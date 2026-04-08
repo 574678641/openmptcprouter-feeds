@@ -254,14 +254,14 @@ while true; do
 				if [ "$disabled" != "1" ] && [ "$serverip" != "1" ]; then
 					case "$type" in
 					libev)
-						if ! pgrep -q ss-redir && [ "$(uci -q get shadowsocks-libev.${server}.key)" != "" ]; then
+						if ! pgrep ss-redir >/dev/null && [ "$(uci -q get shadowsocks-libev.${server}.key)" != "" ]; then
 							_log "Can't find shadowsocks, restart it..."
 							/etc/init.d/shadowsocks-libev restart
 							sleep 5
 						fi
 						;;
 					rust)
-						if ! pgrep -q sslocal && [ "$(uci -q get shadowsocks-rust.${server}.password)" != "" ]; then
+						if ! pgrep sslocal >/dev/null && [ "$(uci -q get shadowsocks-rust.${server}.password)" != "" ]; then
 							_log "Can't find shadowsocks rust, restart it..."
 							/etc/init.d/shadowsocks-rust restart
 							sleep 5
