@@ -1,6 +1,8 @@
 #!/bin/sh
 # Copyright (C) 2018-2019 Ycarus (Yannick Chabanois) <ycarus@zugaina.org>
 
+NET_CLASS_DIR=${NET_CLASS_DIR:-/sys/class/net}
+
 while true; do
 	iface=""
 	addr=""
@@ -17,6 +19,8 @@ while true; do
 		iface=$(uci -q get dsvpn.vpn.dev)
 		addr=$(uci -q get dsvpn.vpn.localip)
 		peer=$(uci -q get dsvpn.vpn.remoteip)
+	elif [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
+		iface=$(uci -q get mqvpn.interface.tun_name)
 	elif [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
 		iface=$(uci -q get mlvpn.general.interface_name)
 	elif [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
@@ -25,10 +29,10 @@ while true; do
 		iface="vpn_softether"
 	fi
 	[ -z "$addr" ] && addr=$(ubus call network.interface.omrvpn status | jsonfilter -q -e '@["ipv4-address"][0].address' | tr -d "\n")
-	if [ -n "$iface" ] && [ -d "/sys/class/net/$iface" ]; then
-		[ -z "$addr" ] && [ -n "$iface" ] && addr=$(ip -4 addr show dev "$iface" | grep inet | awk '{print $2}' | cut -d/ -f1 | tr -d "\n")
+	if [ -n "$iface" ] && [ -d "${NET_CLASS_DIR}/$iface" ]; then
+		[ -z "$addr" ] && addr=$(ip -4 addr show dev "$iface" | grep inet | awk '{print $2}' | cut -d/ -f1 | tr -d "\n")
 		[ -z "$peer" ] && peer=$(ubus call network.interface.omrvpn status | jsonfilter -q -l 1 -e '@.route[@.target="0.0.0.0"].nexthop' | tr -d "\n")
-		[ -z "$peer" ] && peer=$(ip -4 r list dev "$iface" | grep via | grep -v default | grep -v metric | grep -v / | awk '{print $1; exit}' | tr -d "\n")
+		[ -z "$peer" ] && peer=$(ip -4 r list dev "$iface" | grep via | grep -v default | grep -v metric | grep -v / | awk '{print $3; exit}' | tr -d "\n")
 		[ -z "$peer" ] && peer=$(ip -4 r list dev "$iface" | grep kernel | awk '/proto kernel/ {print $1}' | grep -v / | tr -d "\n")
 		[ -z "$peer" ] && peer=$(ip -4 r list dev "$iface" | awk '/^default via/ {print $3; exit}')
 		[ -n "$addr" ] && [ -n "$peer" ] && {
@@ -41,7 +45,7 @@ while true; do
 					set network.omr6in4.metric=1
 					commit network
 				EOF
-				if [ -n "$(ip tunnel | grep omr6in4)" ]; then
+				if ip tunnel show | grep -q "^6in4-omr6in4:"; then
 					ip tunnel change "6in4-omr6in4" mode sit local "${addr}" remote "${peer}" ttl 64 > /dev/null 2>&1
 				else
 					ifup omr6in4 > /dev/null 2>&1
@@ -49,23 +53,25 @@ while true; do
 				sleep 5
 				#ipv6_addr=$(ip -6 addr show dev 6in4-omr6in4 | grep inet | awk '{print $2'} | cut -d/ -f1 | tr -d "\n")
 				#ipv6_gw=$(echo $ipv6_addr | sed 's/1$/2')
-				ipv6_addr=$(ubus call network.interface.omr6in4 status | jsonfilter -q -l 1 -e '@["ipv6-address"][0].address' | tr -d "\n")
-				ip -6 addr add "$ipv6_addr" dev 6in4-omr6in4 > /dev/null 2>&1
-				ipv6_gw=$(ubus call network.interface.omr6in4 status | jsonfilter -q -l 1 -e '@.route[@.target="::"].nexthop' | tr -d "\n")
+				omr6in4_status=$(ubus call network.interface.omr6in4 status)
+				ipv6_addr=$(echo "$omr6in4_status" | jsonfilter -q -l 1 -e '@["ipv6-address"][0].address' | tr -d "\n")
+				ipv6_prefix=$(echo "$omr6in4_status" | jsonfilter -q -l 1 -e '@["ipv6-address"][0].mask' | tr -d "\n")
+				[ -n "$ipv6_addr" ] && [ -n "$ipv6_prefix" ] && ip -6 addr add "$ipv6_addr/$ipv6_prefix" dev 6in4-omr6in4 > /dev/null 2>&1
+				ipv6_gw=$(echo "$omr6in4_status" | jsonfilter -q -l 1 -e '@.route[@.target="::"].nexthop' | tr -d "\n")
 				[ "$ipv6_gw" = "::" ] && ipv6_gw='fe80::a00:1'
 				[ -z "$ipv6_gw" ] && ipv6_gw='fe80::a00:1'
 				#[ -z "$ipv6_gw" ] && ipv6_gw='fe80::aff:ff01'
-				ip -6 route add "${ipv6_gw}" dev 6in4-omr6in4 > /dev/null 2>&1
-				ip -6 route add 2002::/16 dev 6in4-omr6in4 > /dev/null 2>&1
-				ip -6 route replace default via "${ipv6_gw}" dev 6in4-omr6in4 metric 1 > /dev/null 2>&1
+				[ -n "$ipv6_addr" ] && ip -6 route add "${ipv6_gw}" dev 6in4-omr6in4 > /dev/null 2>&1
+				[ -n "$ipv6_addr" ] && ip -6 route add 2002::/16 dev 6in4-omr6in4 > /dev/null 2>&1
+				[ -n "$ipv6_addr" ] && ip -6 route replace default via "${ipv6_gw}" dev 6in4-omr6in4 metric 1 > /dev/null 2>&1
 				# Resolve LAN device from firewall lan zone to support custom network section names.
 				lan_dev=""
 				lan_ip6assign=""
 				lan_networks=$(uci -q get firewall.zone_lan.network)
 				if [ -z "$lan_networks" ]; then
 					for z in $(uci -q show firewall | sed -n "s/^firewall\.\([^=]*\)=zone$/\1/p"); do
-						if [ "$(uci -q get firewall.$z.name)" = "lan" ]; then
-							lan_networks=$(uci -q get firewall.$z.network)
+						if [ "$(uci -q get firewall."$z".name)" = "lan" ]; then
+							lan_networks=$(uci -q get firewall."$z".network)
 							break
 						fi
 					done
@@ -76,7 +82,7 @@ while true; do
 					[ -z "$cand_dev" ] && cand_dev=$(uci -q get network."$netname".ifname)
 					cand_dev=${cand_dev%% *}
 					cand_ip6assign=$(uci -q get network."$netname".ip6assign)
-					if [ -n "$cand_dev" ] && [ -d "/sys/class/net/$cand_dev" ]; then
+					if [ -n "$cand_dev" ] && [ -d "${NET_CLASS_DIR}/$cand_dev" ]; then
 						lan_dev="$cand_dev"
 						[ -n "$cand_ip6assign" ] && lan_ip6assign="$cand_ip6assign"
 						break
@@ -93,7 +99,7 @@ while true; do
 				[ -z "$lan_ip6assign" ] && lan_ip6assign=$(uci -q get network.LAN.ip6assign)
 				[ -z "$lan_ip6assign" ] && lan_ip6assign="60"
 				lan_ula_prefix=$(echo "$ula_prefix" | sed "s|/48|/$lan_ip6assign|")
-				if [ -n "$lan_ula_prefix" ] && [ -d "/sys/class/net/$lan_dev" ]; then
+				if [ -n "$lan_ula_prefix" ] && [ -d "${NET_CLASS_DIR}/$lan_dev" ]; then
 					# Ensure a connected LAN ULA route exists and remove auto blackhole.
 					ip -6 route replace "$lan_ula_prefix" dev "$lan_dev" > /dev/null 2>&1
 					ip -6 route del unreachable "${ula_prefix%%/*}/48" > /dev/null 2>&1
@@ -113,4 +119,5 @@ while true; do
 		ifdown omr6in4 > /dev/null 2>&1
 	fi
 	sleep 10
+	[ -n "${OMR_6IN4_BREAK:-}" ] && break
 done
