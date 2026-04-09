@@ -739,7 +739,7 @@ _get_gre_tunnel() {
 			peeraddr="$(echo $tunnel | jsonfilter -q -e '@.remote_ip')"
 			ipaddr="$(echo $tunnel | jsonfilter -q -e '@.local_ip')"
 			publicaddr="$(echo $tunnel | jsonfilter -q -e '@.public_ip')"
-			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omr_out.protocol)" ])); then
+			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omrout.protocol)" ])); then
 				uci -q batch <<-EOF >/dev/null
 					set network.oip${i}gre=interface
 					set network.oip${i}gre.label="GRE tunnel for $publicaddr"
@@ -886,7 +886,8 @@ _get_gre_tunnel() {
 							set xray.oip${i}_redir.listen='0.0.0.0'
 							set xray.oip${i}_redir.port='180${i}'
 							set xray.oip${i}_redir.protocol='dokodemo-door'
-							set xray.oip${i}_redir.s_dokodemo_door_network='tcp' 'udp'
+							set xray.oip${i}_redir.s_dokodemo_door_network='tcp'
+							add_list xray.oip${i}_redir.s_dokodemo_door_network='udp'
 							set xray.oip${i}_redir.ss_sockopt_tproxy='redirect'
 							set xray.oip${i}_redir.ss_sockopt_tcp_fast_open='1'
 							set xray.oip${i}_redir.ss_sockopt_mptcp='1'
@@ -895,7 +896,7 @@ _get_gre_tunnel() {
 							set xray.oip${i}_routing.tag="oip${i}_routing"
 							set xray.oip${i}_routing.type='field'
 							set xray.oip${i}_routing.inbound_tag="oip${i}_redir"
-							set xray.oip${i}_routing.outbound_tag="oip${i}_tunnel"
+							set xray.oip${i}_routing.outbound_tag="oip${i}server_tunnel"
 							add_list xray.main_routing.rules="oip${i}_routing"
 							set xray.oip${i}_transparent_proxy=transparent_proxy
 							set xray.oip${i}_transparent_proxy.proxy_mode='default'
@@ -1692,10 +1693,15 @@ _set_config_from_vps() {
 	fi
 
 	ula="$(echo "$vps_config" | jsonfilter -q -e '@.ip6in4.ula')"
-	if [ -n "$ula" ] && [[ "$ula" != *" "* ]]; then
-		uci -q batch <<-EOF >/dev/null
-		set network.globals.ula_prefix=$ula
-		EOF
+	if [ -n "$ula" ]; then
+		case "$ula" in
+			*" "*) ;;
+			*)
+				uci -q batch <<-EOF >/dev/null
+				set network.globals.ula_prefix=$ula
+				EOF
+			;;
+		esac
 	fi
 
 	# Set current VPN
@@ -2304,7 +2310,7 @@ _set_config_from_vps() {
 	uci -q batch <<-EOF >/dev/null
 		del iperf.${servername}
 		set iperf.${servername}=server
-		set iperf.${servername}.host=$server
+		set iperf.${servername}.host=$vpsip
 		set iperf.${servername}.ports=65400
 		set iperf.${servername}.ipv4=1
 		set iperf.${servername}.ipv6=0
