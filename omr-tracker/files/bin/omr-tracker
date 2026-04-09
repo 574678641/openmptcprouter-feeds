@@ -192,6 +192,55 @@ _httping_server_all() {
 	fi
 }
 
+_parse_ping_output() {
+	local output="$1"
+	PING_LOSS=
+	PING_LATENCY=
+	PING_JITTER=
+	PING_RTT_MIN=
+	PING_RTT_MAX=
+	IFS='|' read -r PING_LOSS PING_LATENCY PING_JITTER PING_RTT_MIN PING_RTT_MAX <<-EOF
+$(printf '%s\n' "$output" | awk '
+/packet loss/ && !/errors/ {gsub("%", "", $6); loss=$6; have_loss=1}
+/rtt/ {
+	n=split($0, parts, "/")
+	split(parts[4], prefix, "= ")
+	min=int(prefix[2])
+	avg=int(parts[5])
+	max=int(parts[6])
+	jitter=sprintf("%.1f", parts[7])
+}
+END {
+	if (have_loss) {
+		printf "%s|%s|%s|%s|%s\n", loss, avg, jitter, min, max
+	}
+}')
+EOF
+}
+
+_apply_ping_metrics() {
+	local localip="$1"
+	[ "$localip" = "yes" ] || return 0
+	[ -n "$PING_LATENCY" ] && OMR_TRACKER_LATENCY="$PING_LATENCY"
+	[ -n "$PING_JITTER" ] && OMR_TRACKER_JITTER="$PING_JITTER"
+	[ -n "$PING_RTT_MIN" ] && OMR_TRACKER_RTT_MIN="$PING_RTT_MIN"
+	[ -n "$PING_RTT_MAX" ] && OMR_TRACKER_RTT_MAX="$PING_RTT_MAX"
+	OMR_TRACKER_LOSS="$PING_LOSS"
+}
+
+_parse_httping_output() {
+	local output="$1"
+	HTTPING_LOSS=$(printf '%s\n' "$output" | awk '/failed/ {gsub("%",""); print int($5)}' | tr -d '\n')
+	HTTPING_LATENCY=$(printf '%s\n' "$output" | cut -d "/" -s -f5 | cut -d "." -f1 | tr -d '\n')
+}
+
+_apply_httping_metrics() {
+	local localip="$1"
+	[ "$localip" = "yes" ] || return 0
+	[ -n "$HTTPING_LATENCY" ] && OMR_TRACKER_LATENCY="$HTTPING_LATENCY"
+	OMR_TRACKER_LOSS="$HTTPING_LOSS"
+}
+
 
 _ping() {
 	local host="$1"
@@ -207,21 +256,6 @@ _ping() {
 			-Q 184 \
 			"${host}" 2>&1
 		)
-		loss=$(echo "$ret" | awk '/packet loss/ && !/errors/ {gsub("%","");printf "%s",$6}')
-		if [ -n "$loss" ] && [ "$loss" != "100" ]; then
-			if [ "$localip" = "yes" ]; then
-				latency=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($5)}')
-				jitter=$(echo "$ret" | awk -F/ '/rtt/ {printf "%.1f", $7}')
-				rtt_min=$(echo "$ret" | awk -F/ '/rtt/ {split($4,a,"= "); printf "%d", int(a[2])}')
-				rtt_max=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($6)}')
-				[ -n "$latency" ] && OMR_TRACKER_LATENCY="$latency"
-				[ -n "$jitter" ] && OMR_TRACKER_JITTER="$jitter"
-				[ -n "$rtt_min" ] && OMR_TRACKER_RTT_MIN="$rtt_min"
-				[ -n "$rtt_max" ] && OMR_TRACKER_RTT_MAX="$rtt_max"
-				OMR_TRACKER_LOSS="$loss"
-			fi
-			return 0
-		fi
 	else
 		ret=$(ping -B -I "${device}" \
 			-w "$OMR_TRACKER_TIMEOUT" \
@@ -231,24 +265,14 @@ _ping() {
 			-Q 184 \
 			"${host}" 2>&1
 		)
-		bindcheck=$(echo "$ret" | grep "Address not available")
-		[ -n "$bindcheck" ] && OMR_TRACKER_NO_BIND=1
-		loss=$(echo "$ret" | awk '/packet loss/ && !/errors/ {gsub("%","");printf "%s",$6}')
-		if [ -n "$loss" ] && [ "$loss" != "100" ]; then
-			if [ "$localip" = "yes" ]; then
-				#latency=$(echo "$ret" | grep rtt | cut -d "/" -s -f5 | cut -d "." -f1 | tr -d '\n')
-				latency=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($5)}')
-				jitter=$(echo "$ret" | awk -F/ '/rtt/ {printf "%.1f", $7}')
-				rtt_min=$(echo "$ret" | awk -F/ '/rtt/ {split($4,a,"= "); printf "%d", int(a[2])}')
-				rtt_max=$(echo "$ret" | awk -F/ '/rtt/ {printf "%d", int($6)}')
-				[ -n "$latency" ] && OMR_TRACKER_LATENCY="$latency"
-				[ -n "$jitter" ] && OMR_TRACKER_JITTER="$jitter"
-				[ -n "$rtt_min" ] && OMR_TRACKER_RTT_MIN="$rtt_min"
-				[ -n "$rtt_max" ] && OMR_TRACKER_RTT_MAX="$rtt_max"
-				OMR_TRACKER_LOSS="$loss"
-			fi
-			return 0
-		fi
+		case "$ret" in
+			*"Address not available"*) OMR_TRACKER_NO_BIND=1 ;;
+		esac
+	fi
+	_parse_ping_output "$ret"
+	if [ -n "$PING_LOSS" ] && [ "$PING_LOSS" != "100" ]; then
+		_apply_ping_metrics "$localip"
+		return 0
 	fi
 	return 1
 }
@@ -265,15 +289,12 @@ _httping() {
 		-t "$OMR_TRACKER_TIMEOUT" \
 		-c "$OMR_TRACKER_COUNT" 2>&1
 	)
-	bindcheck=$(echo "$ret" | grep "Address not available")
-	[ -n "$bindcheck" ] && OMR_TRACKER_NO_BIND=1
-	loss=$(echo "$ret" | awk '/failed/ {gsub("%",""); print int($5)}' | tr -d '\n')
-	if [ -n "$loss" ] && [ "$loss" != "100" ]; then
-		if [ "$localip" = "yes" ]; then
-			latency=$(echo "$ret" | cut -d "/" -s -f5 | cut -d "." -f1 | tr -d '\n')
-			[ -n "$latency" ] && OMR_TRACKER_LATENCY="$latency"
-			OMR_TRACKER_LOSS="$loss"
-		fi
+	case "$ret" in
+		*"Address not available"*) OMR_TRACKER_NO_BIND=1 ;;
+	esac
+	_parse_httping_output "$ret"
+	if [ -n "$HTTPING_LOSS" ] && [ "$HTTPING_LOSS" != "100" ]; then
+		_apply_httping_metrics "$localip"
 		return 0
 	fi
 	return 1
