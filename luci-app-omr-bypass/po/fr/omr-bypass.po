@@ -142,6 +142,42 @@ msgstr "protocole"
 msgid "source MAC-Address"
 msgstr "Adresse MAC source"
 
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "VPN on server"
+msgstr "VPN sur le serveur"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Bypass using VPN configured on server."
+msgstr "Contournement via le VPN configuré sur le serveur."
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Output interface"
+msgstr "Interface de sortie"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Restrict to address family"
+msgstr "Restreindre à la famille d'adresses"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 and IPv6"
+msgstr "IPv4 et IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 only"
+msgstr "IPv4 uniquement"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv6 only"
+msgstr "IPv6 uniquement"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Disable AAAA IPv6 DNS"
+msgstr "Désactiver les DNS AAAA IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Enable ndpi"
+msgstr "Activer ndpi"
+
 #~ msgid "<abbr title=\"Media Access Control\">MAC</abbr>-Address"
 #~ msgstr "Adresse <abbr title=\"Media Access Control\">MAC</abbr>"
 

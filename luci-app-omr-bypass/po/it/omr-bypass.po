@@ -139,3 +139,39 @@ msgstr "Protocollo"
 #: luci-app-omr-bypass/htdocs/luci-static/resources/view/services/omr-bypass.js:124
 msgid "source MAC-Address"
 msgstr "indirizzo MAC di origine"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "VPN on server"
+msgstr "VPN sul server"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Bypass using VPN configured on server."
+msgstr "Bypass tramite VPN configurata sul server."
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Output interface"
+msgstr "Interfaccia di uscita"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Restrict to address family"
+msgstr "Limita alla famiglia di indirizzi"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 and IPv6"
+msgstr "IPv4 e IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 only"
+msgstr "Solo IPv4"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv6 only"
+msgstr "Solo IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Disable AAAA IPv6 DNS"
+msgstr "Disabilita DNS AAAA IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Enable ndpi"
+msgstr "Abilita ndpi"

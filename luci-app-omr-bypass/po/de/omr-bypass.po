@@ -62,9 +62,8 @@ msgid "Interface"
 msgstr "Schnittstelle"
 
 #: luci-app-omr-bypass/htdocs/luci-static/resources/view/services/omr-bypass.js:116
-#, fuzzy
 msgid "MAC-Address"
-msgstr "Quell-MAC-Adresse"
+msgstr "MAC-Adresse"
 
 #: luci-app-omr-bypass/htdocs/luci-static/resources/view/services/omr-bypass.js:42
 #: luci-app-omr-bypass/htdocs/luci-static/resources/view/services/omr-bypass.js:61
@@ -134,9 +133,44 @@ msgid "protocol"
 msgstr "Protokoll"
 
 #: luci-app-omr-bypass/htdocs/luci-static/resources/view/services/omr-bypass.js:124
-#, fuzzy
 msgid "source MAC-Address"
 msgstr "Quell-MAC-Adresse"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "VPN on server"
+msgstr "VPN auf dem Server"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Bypass using VPN configured on server."
+msgstr "Umleitung über das auf dem Server konfigurierte VPN."
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Output interface"
+msgstr "Ausgangsschnittstelle"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Restrict to address family"
+msgstr "Auf Adressfamilie beschränken"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 and IPv6"
+msgstr "IPv4 und IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv4 only"
+msgstr "Nur IPv4"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "IPv6 only"
+msgstr "Nur IPv6"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Disable AAAA IPv6 DNS"
+msgstr "AAAA IPv6 DNS deaktivieren"
+
+#: htdocs/luci-static/resources/view/services/omr-bypass.js
+msgid "Enable ndpi"
+msgstr "ndpi aktivieren"
 
 #~ msgid "<abbr title=\"Media Access Control\">MAC</abbr>-Address"
 #~ msgstr "<abbr title=\"Media Access Control\">MAC</abbr>-Addresse"
