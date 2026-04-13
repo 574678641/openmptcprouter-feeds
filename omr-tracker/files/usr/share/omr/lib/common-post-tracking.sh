@@ -418,7 +418,7 @@ _set_server_all_routes_common() {
 
 		multipath_config_route=$(_get_multipath_config $OMR_TRACKER_INTERFACE)
 
-		if [ "$serverip" != "" ] && [ "$multipath_config_route" != "off" ] && [ "$interface_up" = "true" ]; then
+		if [ "$serverip" != "" ] && [ "$multipath_config_route" != "off" ]; then
 			eval "${routes_var}=''"
 			eval "${backup_var}=''"
 			eval "${nbintf_var}=0"

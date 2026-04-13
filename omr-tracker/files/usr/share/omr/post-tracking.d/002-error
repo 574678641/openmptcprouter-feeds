@@ -205,12 +205,11 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 				config_foreach set_route6 interface $OMR_TRACKER_INTERFACE "no"
 			fi
 		fi
-		if [ "$(uci -q get openmptcprouter.settings.master)" = "balancing" ]; then
-			[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set balancing route (current: $(ip r) )"
-			config_foreach set_server_all_routes server
-			config_foreach set_server_all_routes6 server
-			[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set balancing route done (new: $(ip r) )"
-		fi
+		[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set server routes (current: $(ip r) )"
+		config_load openmptcprouter
+		config_foreach set_server_all_routes server
+		config_foreach set_server_all_routes6 server
+		[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set server routes done (new: $(ip r) )"
 	fi
 	
 	mail_alert=""
