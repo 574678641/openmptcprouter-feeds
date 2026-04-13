@@ -418,3 +418,110 @@ msgstr "Ping"
 #: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:47
 msgid "None"
 msgstr "Nessuno"
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:42
+msgid "Enable monitoring and automatic state changes for this interface."
+msgstr "Abilita il monitoraggio e i cambi di stato automatici per questa interfaccia."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:51
+msgid "Choose whether checks use IPv4 targets, IPv6 targets, or both."
+msgstr "Scegli se i controlli usano destinazioni IPv4, IPv6 o entrambe."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:58
+msgid "Select the host group used for connectivity tests on this interface."
+msgstr "Seleziona il gruppo di host usato per i test di connettivita su questa interfaccia."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:170
+msgid "Number of probes sent during each test cycle."
+msgstr "Numero di sonde inviate durante ogni ciclo di test."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:182
+msgid "Payload size in bytes for ICMP probes when using ping tracking."
+msgstr "Dimensione del payload in byte per le sonde ICMP quando si usa il monitoraggio ping."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:198
+msgid "Maximum TTL or hop limit allowed for ping-based checks."
+msgstr "TTL massimo o limite di hop consentito per i controlli basati su ping."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:211
+msgid "Mark the interface down when latency or packet loss crosses the thresholds below."
+msgstr "Segna l'interfaccia come non attiva quando latenza o perdita di pacchetti superano le soglie seguenti."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:217
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:74
+msgid "Latency above this value is treated as a failure while quality checks are enabled."
+msgstr "Una latenza superiore a questo valore viene trattata come errore quando i controlli di qualita sono abilitati."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:230
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:87
+msgid "Packet loss above this percentage is treated as a failure."
+msgstr "Una perdita di pacchetti superiore a questa percentuale viene trattata come errore."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:242
+msgid "Latency must fall below this value before the interface is considered recovered."
+msgstr "La latenza deve scendere sotto questo valore prima che l'interfaccia sia considerata ripristinata."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:255
+msgid "Packet loss must fall below this percentage before the interface is considered recovered."
+msgstr "La perdita di pacchetti deve scendere sotto questa percentuale prima che l'interfaccia sia considerata ripristinata."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:267
+msgid "Maximum time to wait for each test response before it is counted as failed."
+msgstr "Tempo massimo di attesa per ogni risposta di test prima di considerarla fallita."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/interface.js:276
+msgid "Delay between normal test cycles while the interface is considered healthy."
+msgstr "Intervallo tra i cicli di test normali mentre l'interfaccia e considerata sana."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/proxy.js:33
+msgid "Enable monitoring for this proxy and stop using it automatically when tests fail."
+msgstr "Abilita il monitoraggio di questo proxy e smetti di usarlo automaticamente quando i test falliscono."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/proxy.js:44
+msgid "Choose whether proxy checks use IPv4 targets, IPv6 targets, or both."
+msgstr "Scegli se i controlli del proxy usano destinazioni IPv4, IPv6 o entrambe."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/proxy.js:113
+msgid "Number of probes sent during each proxy test cycle."
+msgstr "Numero di sonde inviate durante ogni ciclo di test del proxy."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/proxy.js:123
+msgid "Maximum time to wait for each proxy test before it is counted as failed."
+msgstr "Tempo massimo di attesa prima che ogni test del proxy sia considerato fallito."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/proxy.js:130
+msgid "Delay between regular proxy health checks while the proxy is considered available."
+msgstr "Intervallo tra i controlli regolari dello stato del proxy mentre il proxy e considerato disponibile."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:33
+msgid "Enable server monitoring and automatic fallback to a backup server when checks fail."
+msgstr "Abilita il monitoraggio del server e il passaggio automatico a un server di backup quando i controlli falliscono."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:42
+msgid "Choose whether server health is verified through the API, ping probes, or both."
+msgstr "Scegli se lo stato del server viene verificato tramite API, sonde ping o entrambe."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:59
+msgid "Number of probes sent during each server test cycle."
+msgstr "Numero di sonde inviate durante ogni ciclo di test del server."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:68
+msgid "Use latency and packet loss thresholds to detect degraded server connectivity."
+msgstr "Usa soglie di latenza e perdita di pacchetti per rilevare una connettivita del server degradata."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:100
+msgid "Latency must fall below this value before the server is considered healthy again."
+msgstr "La latenza deve scendere sotto questo valore prima che il server sia considerato di nuovo sano."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:113
+msgid "Packet loss must fall below this percentage before the server is considered healthy again."
+msgstr "La perdita di pacchetti deve scendere sotto questa percentuale prima che il server sia considerato di nuovo sano."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:125
+msgid "Maximum time to wait for each API or ping test before it is counted as failed."
+msgstr "Tempo massimo di attesa prima che ogni test API o ping sia considerato fallito."
+
+#: luci-app-omr-tracker/htdocs/luci-static/resources/view/omr-tracker/network/server.js:132
+msgid "Delay between regular server health checks while the server is considered available."
+msgstr "Intervallo tra i controlli regolari dello stato del server mentre il server e considerato disponibile."
+
