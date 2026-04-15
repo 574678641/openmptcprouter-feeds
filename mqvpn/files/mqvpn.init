@@ -92,7 +92,6 @@ generate_config() {
 		echo "Insecure = $(_bool "$insecure")"
 		echo ''
 		echo '[Auth]'
-		[ -n "$user" ] && echo "User = $user"
 		echo "Key = $key"
 		echo ''
 		echo '[Interface]'
@@ -146,9 +145,7 @@ _write_iface_path() {
 	[ "$mode" = "" ] && mode="$(uci -q get openmptcprouter."$config".multipath)"
 	[ "$mode" = "on" ] || [ "$mode" = "master" ] || [ "$mode" = "backup" ] || return 0
 
-	config_get ifname "$config" device
-	[ -z "$ifname" ] && config_get ifname "$config" ifname
-	[ -z "$ifname" ] && ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["l3_device"]')
+	ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["l3_device"]')
 	[ -n "$(echo "$ifname" | grep '@')" ] && ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["device"]')
 	[ -z "$ifname" ] && return 0
 
