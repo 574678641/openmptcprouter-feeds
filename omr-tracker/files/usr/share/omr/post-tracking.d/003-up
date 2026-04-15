@@ -17,7 +17,7 @@ fi
 
 SETROUTE=false
 
-. /usr/share/omr/lib/common-post-tracking.sh
+. "${OMR_LIB_DIR:-/usr/share/omr/lib}/common-post-tracking.sh"
 
 
 #if [ -n "$RANDOM" ]; then

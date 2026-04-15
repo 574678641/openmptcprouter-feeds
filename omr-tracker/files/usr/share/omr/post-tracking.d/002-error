@@ -10,7 +10,7 @@
 
 interface_up=$(ifstatus "$OMR_TRACKER_INTERFACE" 2>/dev/null | jsonfilter -q -e '@["up"]')
 
-. /usr/share/omr/lib/common-post-tracking.sh
+. "${OMR_LIB_DIR:-/usr/share/omr/lib}/common-post-tracking.sh"
 
 if [ "$OMR_TRACKER_STATUS" = "ERROR" ] && [ "$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.state)" != "down" ]; then
 	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.state='down'
@@ -138,7 +138,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 	multipath_status="off"
 #	[ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && multipath $OMR_TRACKER_DEVICE off >/dev/null 2>&1
 #	[ "$OMR_TRACKER_INTERFACE" = "omr6in4" ] && multipath $OMR_TRACKER_DEVICE off >/dev/null 2>&1
-	if [ -e "/sys/class/net/$OMR_TRACKER_DEVICE" ]; then
+	if [ -e "${OMR_SYS_CLASS_NET_DIR:-/sys/class/net}/$OMR_TRACKER_DEVICE" ]; then
 		case "$(multipath "$OMR_TRACKER_DEVICE" 2>/dev/null)" in
 			*default*)      multipath_status="on"       ;;
 			*backup*)       multipath_status="backup"   ;;
