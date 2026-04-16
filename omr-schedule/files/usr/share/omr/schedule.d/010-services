@@ -48,6 +48,11 @@ if [ -n "$(uci show openmptcprouter | awk -F= '/password/ { gsub("\047","",$2);p
 		/etc/init.d/mlvpn restart >/dev/null 2>&1
 		sleep 5
 	fi
+	if [ "$(pgrep mqvpn)" = "" ] && [ "$(uci -q get mqvpn.settings.enable)" = "1" ] && [ -f /etc/init.d/mqvpn ] && [ "$(uci -q get mlvpn.auth.key)" != "" ]; then
+		_log "Can't find MQVPN, restart it..."
+		/etc/init.d/mqvpn restart >/dev/null 2>&1
+		sleep 5
+	fi
 	if [ "$(pgrep dsvpn)" = "" ] && [ "$(uci -q get dsvpn.vpn.enable)" = "1" ] && [ -f /etc/init.d/dsvpn ] && [ "$(uci -q get dsvpn.vpn.key)" != "" ]; then
 		_log "Can't find DSVPN, restart it..."
 		/etc/init.d/dsvpn restart >/dev/null 2>&1
@@ -101,15 +106,15 @@ if [ -n "$(uci show openmptcprouter | awk -F= '/password/ { gsub("\047","",$2);p
 		config_load openmptcprouter
 		config_foreach set_get_config server
 		[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
-	fi
-	
-	if [ "$(uci -q get v2ray.main.enabled)" = "1" ] && [ "$(uci -q get v2ray.omrout.s_vless_user_id)" = "" ]; then
+	elif [ "$(uci -q get mqvpn.settings.enable)" = "1" ] && [ "$(uci -q get mqvpn.auth.key)" = "" ]; then
 		config_load openmptcprouter
 		config_foreach set_get_config server
 		[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
-	fi
-
-	if [ "$(uci -q get xray.main.enabled)" = "1" ] && [ "$(uci -q get xray.omrout.s_vless_user_id)" = "" ]; then
+	elif [ "$(uci -q get v2ray.main.enabled)" = "1" ] && [ "$(uci -q get v2ray.omrout.s_vless_user_id)" = "" ]; then
+		config_load openmptcprouter
+		config_foreach set_get_config server
+		[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
+	elif [ "$(uci -q get xray.main.enabled)" = "1" ] && [ "$(uci -q get xray.omrout.s_vless_user_id)" = "" ]; then
 		config_load openmptcprouter
 		config_foreach set_get_config server
 		[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
