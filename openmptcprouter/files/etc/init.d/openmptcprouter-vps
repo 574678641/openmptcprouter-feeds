@@ -2185,7 +2185,8 @@ _set_config_from_vps() {
 	   ( [ "$mqvpn_key" != "$(uci -q get mqvpn.auth.key)" ] || \
 	     [ "$mqvpn_user" != "$(uci -q get mqvpn.auth.user)" ] || \
 	     [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || \
-	     [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port" ] ); then
+	     [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port" ] || \
+	     ( [ "$(uci -q get openmptcprouter.settings.vpn)" = "mqvpn" ] && [ "$(uci -q get mqvpn.settings.enable)" != "1" ] ) ); then
 		mqvpn_state=0
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		if [ "$vpn" = "mqvpn" ]; then
