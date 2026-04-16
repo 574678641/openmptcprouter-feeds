@@ -34,7 +34,13 @@ var callUpdateVPS = rpc.declare({
 return view.extend({
 	load: function() {
 		return Promise.all([
-			uci.load(['openmptcprouter', 'shadowsocks-libev', 'v2ray', 'xray', 'firewall']),
+			Promise.all([
+				L.resolveDefault(uci.load('openmptcprouter'), null),
+				L.resolveDefault(uci.load('shadowsocks-libev'), null),
+				L.resolveDefault(uci.load('v2ray'), null),
+				L.resolveDefault(uci.load('xray'), null),
+				L.resolveDefault(uci.load('firewall'), null),
+			]),
 			L.resolveDefault(fs.stat('/usr/bin/obfs-local'),    null),
 			L.resolveDefault(fs.stat('/usr/bin/v2ray-plugin'),  null),
 			L.resolveDefault(fs.read('/proc/sys/net/ipv4/tcp_keepalive_time'), ''),
