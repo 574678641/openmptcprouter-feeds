@@ -144,18 +144,7 @@ endef
 define Package/mqvpn/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(MQVPN_BUILD)/mqvpn $(1)/usr/sbin/mqvpn
-	# Optional init script
-	if [ -f "$(CURDIR)/files/mqvpn.init" ]; then \
-		$(INSTALL_DIR) $(1)/etc/init.d; \
-		$(INSTALL_BIN) $(CURDIR)/files/mqvpn.init $(1)/etc/init.d/mqvpn; \
-	fi
-	# Optional UCI config
-	if [ -f "$(CURDIR)/files/mqvpn.config" ]; then \
-		$(INSTALL_DIR) $(1)/etc/config; \
-		$(INSTALL_DATA) $(CURDIR)/files/mqvpn.config $(1)/etc/config/mqvpn; \
-	fi
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(CURDIR)/files/mqvpn-path $(1)/usr/bin/mqvpn-path
+	$(CP) ./files/* $(1)/
 endef
 
 $(eval $(call BuildPackage,mqvpn))

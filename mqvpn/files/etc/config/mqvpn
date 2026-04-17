@@ -10,7 +10,7 @@ config auth 'auth'
 	option key 'mPyVpoQWcp/5gr404xvS19aRC03o0XS2mrb2tZJ1Ii4='
 
 config interface 'interface'
-	option tun_name 'mqvpn0'
+	option tun_name 'tun0'
 	option log_level 'error'
 	option kill_switch '0'
 	option reconnect '1'
