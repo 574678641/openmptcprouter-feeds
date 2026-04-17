@@ -280,7 +280,7 @@ function default_vpn(default_vpn)
 		ucic:set("network","omrvpn","proto","dhcp")
 	elseif default_vpn == "mqvpn" then
 		vpn_port = 65443
-		vpn_intf = "mqvpn0"
+		vpn_intf = "tun0"
 		ucic:set("network","omrvpn","proto","dhcp")
 	end
 	if vpn_intf ~= "" then
