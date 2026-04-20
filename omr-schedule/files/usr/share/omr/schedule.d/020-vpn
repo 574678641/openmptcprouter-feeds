@@ -70,3 +70,4 @@ _set_vpn_state "mqvpn"         mqvpn        settings         enable  mqvpn
 _set_vpn_state "dsvpn"         dsvpn        vpn              enable  dsvpn
 _set_vpn_state "softethervpn"  softethervpn openmptcprouter  enable  softethervpnclient
 _set_openvpn_state
+exit 0

@@ -107,3 +107,4 @@ if [ "$(uci -q get openmptcprouter.settings.shadowsocks_disable)" != "$ss_disabl
 fi
 
 [ "$changed" = "1" ] && /etc/init.d/omr-tracker restart >/dev/null 2>&1
+exit 0
