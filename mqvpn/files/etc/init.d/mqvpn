@@ -145,6 +145,10 @@ _write_iface_path() {
 	[ "$mode" = "" ] && mode="$(uci -q get openmptcprouter."$config".multipath)"
 	[ "$mode" = "on" ] || [ "$mode" = "master" ] || [ "$mode" = "backup" ] || return 0
 
+	local state
+	state="$(uci -q get openmptcprouter."$config".state)"
+	[ "$state" = "up" ] || return 0
+
 	ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["l3_device"]')
 	[ -n "$(echo "$ifname" | grep '@')" ] && ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["device"]')
 	[ -z "$ifname" ] && return 0
