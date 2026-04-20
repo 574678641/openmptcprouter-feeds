@@ -2076,7 +2076,7 @@ _set_config_from_vps() {
 	[ -n "$openvpn_client_ca" ] && {
 		echo $openvpn_client_ca | base64 -d > /etc/luci-uploads/ca.crt
 	}
-	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_crt" ] && [ -n "$openvpn_client_ca" ] && {
+	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_ca" ] && {
 		openvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.openvpn.port')"
 		[ -z "$openvpn_port" ] && openvpn_port="65001"
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
@@ -2099,7 +2099,7 @@ _set_config_from_vps() {
 			config_foreach _set_openvpn_server openvpn "enabled" "$openvpn_state"
 		fi
 		config_foreach _set_openvpn_server openvpn "key" "/etc/luci-uploads/client.key"
-		config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
+		[ -n "$openvpn_client_crt" ] && config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
 		config_foreach _set_openvpn_server openvpn "ca" "/etc/luci-uploads/ca.crt"
 		config_foreach _set_openvpn_server openvpn "tls_client" "1"
 		config_foreach _set_openvpn_server openvpn "client" "1"
