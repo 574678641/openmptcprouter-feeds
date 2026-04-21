@@ -320,6 +320,12 @@ _none() {
 	return 0
 }
 
+# Export callback functions for config_foreach
+export -f _ping_server
+export -f _ping_server_all
+export -f _httping_server
+export -f _httping_server_all
+
 _restart
 
 OMR_TRACKER_INTERFACE_PROTO="$(uci -q get network.${OMR_TRACKER_INTERFACE}.proto)"
@@ -475,7 +481,7 @@ while true; do
 						fi
 						if [ "$OMR_TRACKER_TYPE" = "httping" ]; then
 							config_load openmptcprouter
-							config_foreach _httping_server server $OMR_TRACKER_DEVICE
+							config_foreach _httping_server server $OMR_TRACKER_DEVICE_IP
 						fi
 						if [ "$serverip_ping" = false ] && [ -n "$OMR_TRACKER_HOST" ]; then
 							OMR_TRACKER_HOST=$(resolveip -4 -t 5 $OMR_TRACKER_HOST | head -n 1 | tr -d "\n")
@@ -588,7 +594,7 @@ while true; do
 						fi
 						if [ "$OMR_TRACKER_TYPE" = "httping" ]; then
 							config_load openmptcprouter
-							config_foreach _httping_server server $OMR_TRACKER_DEVICE
+							config_foreach _httping_server server $OMR_TRACKER_DEVICE_IP6
 						fi
 
 						if [ "$serverip_ping" = false ] && [ -n "$OMR_TRACKER_HOST6" ]; then

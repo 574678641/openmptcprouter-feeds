@@ -164,7 +164,7 @@ _launch_tracker() {
 	procd_set_param respawn 0 10 0
 	procd_set_param stderr 1
 	procd_close_instance
-	sleep 2
+	sleep 1
 }
 
 _launch_server_tracker() {
@@ -188,7 +188,7 @@ _launch_server_tracker() {
 	procd_set_param respawn 0 10 0
 	procd_set_param stderr 1
 	procd_close_instance
-	sleep 2
+	sleep 1
 }
 
 _launch_gre_tracker() {
@@ -211,7 +211,7 @@ _launch_gre_tracker() {
 	procd_set_param respawn 0 10 0
 	procd_set_param stderr 1
 	procd_close_instance
-	sleep 2
+	sleep 1
 }
 
 _initialize_shadowsocks_tracker() {
@@ -513,11 +513,10 @@ service_triggers() {
 }
 
 reload_service() {
-	restart "$@"
+	start "$@"
 }
 
 restart_service() {
 	stop
-	sleep 5
 	start "$@"
 }
