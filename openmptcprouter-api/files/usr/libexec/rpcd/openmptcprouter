@@ -242,6 +242,11 @@ function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspee
 end
 
 function default_vpn(default_vpn)
+	-- Stop the currently active VPN before switching
+	local prev_vpn = ucic:get("openmptcprouter","settings","vpn") or ""
+	if prev_vpn ~= "" and prev_vpn ~= default_vpn then
+		force_stop_vpn(prev_vpn)
+	end
 	-- Get VPN set by default
 	local vpn_port = ""
 	local vpn_intf = ""
@@ -333,9 +338,16 @@ function default_vpn(default_vpn)
 	ucic:commit("openmptcprouter")
 	ucic:save("network")
 	ucic:commit("network")
+	-- Start the newly selected VPN
+	force_start_vpn(default_vpn)
 end
 
 function default_proxy(proxy)
+	-- Stop the currently active proxy before switching
+	local prev_proxy = ucic:get("openmptcprouter","settings","proxy") or ""
+	if prev_proxy ~= "" and prev_proxy ~= proxy then
+		force_stop_proxy(prev_proxy)
+	end
 	-- Enable/disable proxy services based on selection
 	local is_ss_libev  = (proxy == "shadowsocks")
 	local is_ss_rust   = (proxy == "shadowsocks-rust" or proxy == "shadowsocks-go")
@@ -378,6 +390,8 @@ function default_proxy(proxy)
 	ucic:set("openmptcprouter","settings","proxy",proxy)
 	ucic:save("openmptcprouter")
 	ucic:commit("openmptcprouter")
+	-- Start the newly selected proxy
+	force_start_proxy(proxy)
 end
 
 function server_settings(server,server_ip,openmptcprouter_vps_key,openmptcprouter_vps_username)
@@ -904,6 +918,76 @@ function settings_add(args)
 	apply_settings_async()
 
 	return { status = "reload" }
+end
+
+function force_start_vpn(vpn)
+	if vpn == nil or vpn == "" then
+		vpn = ucic:get("openmptcprouter","settings","vpn") or "glorytun_tcp"
+	end
+	if vpn:match("^glorytun_tcp.*") then
+		sys.exec("/etc/init.d/glorytun start >/dev/null 2>/dev/null")
+	elseif vpn:match("^glorytun_udp.*") then
+		sys.exec("/etc/init.d/glorytun-udp start >/dev/null 2>/dev/null")
+	elseif vpn == "dsvpn" then
+		sys.exec("/etc/init.d/dsvpn start >/dev/null 2>/dev/null")
+	elseif vpn == "mlvpn" then
+		sys.exec("/etc/init.d/mlvpn start >/dev/null 2>/dev/null")
+	elseif vpn == "openvpn" then
+		sys.exec("/etc/init.d/openvpn start >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpnbonding start >/dev/null 2>/dev/null")
+	elseif vpn == "mqvpn" then
+		sys.exec("/etc/init.d/mqvpn start >/dev/null 2>/dev/null")
+	end
+end
+
+function force_stop_vpn(vpn)
+	if vpn == nil or vpn == "" then
+		vpn = ucic:get("openmptcprouter","settings","vpn") or "glorytun_tcp"
+	end
+	if vpn:match("^glorytun_tcp.*") then
+		sys.exec("/etc/init.d/glorytun stop >/dev/null 2>/dev/null")
+	elseif vpn:match("^glorytun_udp.*") then
+		sys.exec("/etc/init.d/glorytun-udp stop >/dev/null 2>/dev/null")
+	elseif vpn == "dsvpn" then
+		sys.exec("/etc/init.d/dsvpn stop >/dev/null 2>/dev/null")
+	elseif vpn == "mlvpn" then
+		sys.exec("/etc/init.d/mlvpn stop >/dev/null 2>/dev/null")
+	elseif vpn == "openvpn" then
+		sys.exec("/etc/init.d/openvpn stop >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpnbonding stop >/dev/null 2>/dev/null")
+	elseif vpn == "mqvpn" then
+		sys.exec("/etc/init.d/mqvpn stop >/dev/null 2>/dev/null")
+	end
+end
+
+function force_start_proxy(proxy)
+	if proxy == nil or proxy == "" then
+		proxy = ucic:get("openmptcprouter","settings","proxy") or "shadowsocks-rust"
+	end
+	if proxy == "shadowsocks" then
+		sys.exec("/etc/init.d/shadowsocks-libev start >/dev/null 2>/dev/null")
+	elseif proxy == "shadowsocks-rust" or proxy == "shadowsocks-go" then
+		sys.exec("/etc/init.d/shadowsocks-rust start >/dev/null 2>/dev/null")
+	elseif proxy:match("^v2ray.*") then
+		sys.exec("/etc/init.d/v2ray start >/dev/null 2>/dev/null")
+	elseif proxy:match("^xray.*") then
+		sys.exec("/etc/init.d/xray start >/dev/null 2>/dev/null")
+	end
+end
+
+function force_stop_proxy(proxy)
+	if proxy == nil or proxy == "" then
+		proxy = ucic:get("openmptcprouter","settings","proxy") or "shadowsocks-rust"
+	end
+	if proxy == "shadowsocks" then
+		sys.exec("/etc/init.d/shadowsocks-libev stop >/dev/null 2>/dev/null")
+	elseif proxy == "shadowsocks-rust" or proxy == "shadowsocks-go" then
+		sys.exec("/etc/init.d/shadowsocks-rust stop >/dev/null 2>/dev/null")
+	elseif proxy:match("^v2ray.*") then
+		sys.exec("/etc/init.d/v2ray stop >/dev/null 2>/dev/null")
+	elseif proxy:match("^xray.*") then
+		sys.exec("/etc/init.d/xray stop >/dev/null 2>/dev/null")
+	end
 end
 
 function restart_all()
@@ -2451,6 +2535,30 @@ local methods = {
 	setopenvpn = {
 		args = { key = "" },
 		call = function(args) set_openvpn(args.key) end
+	},
+	setvpn = {
+		args = { vpn = "openvpn" },
+		call = function(args) default_vpn(args.vpn) end
+	},
+	setproxy = {
+		args = { proxy = "shadowsocks-rust" },
+		call = function(args) default_proxy(args.proxy) end
+	},
+	startvpn = {
+		args = { vpn = "" },
+		call = function(args) force_start_vpn(args.vpn) end
+	},
+	stopvpn = {
+		args = { vpn = "" },
+		call = function(args) force_stop_vpn(args.vpn) end
+	},
+	startproxy = {
+		args = { proxy = "" },
+		call = function(args) force_start_proxy(args.proxy) end
+	},
+	stopproxy = {
+		args = { proxy = "" },
+		call = function(args) force_stop_proxy(args.proxy) end
 	},
 	getmptcpconfig = {
 		args = { interface = "" },
