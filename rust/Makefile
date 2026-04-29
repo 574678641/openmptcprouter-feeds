@@ -78,6 +78,7 @@ HOST_CONFIGURE_ARGS = \
 	--enable-cargo-native-static \
 	--bootstrap-cache-path=$(DL_DIR)/rustc \
 	--set=llvm.download-ci-llvm=false \
+	--set='llvm.extra-config=["LLVM_APPEND_VC_REV=OFF"]' \
 	$(TARGET_CONFIGURE_ARGS)
 
 define Host/Uninstall
