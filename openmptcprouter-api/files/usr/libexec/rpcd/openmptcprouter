@@ -1853,6 +1853,9 @@ function interfaces_status()
 			gw_ping6 = "DOWN"
 			connectivity = "ERROR"
 		end
+		if gateway6 == "" and ipv6 ~= "1" and ipv6 ~= "auto" and gw_ping6 == "DOWN" then
+			gw_ping6 = "OFF"
+		end
 
 		if ifname ~= "" then
 			if proto == "qmi" then
@@ -1885,9 +1888,9 @@ function interfaces_status()
 					local serverips = uci:get("openmptcprouter",s[".name"],"ip") or { "" }
 					local current = uci:get("openmptcprouter",s[".name"],"current") or "0"
 					if current == "1" then
+						local vps_any_up = false
 						for key, value in pairs(serverips) do
-							server_ping = value
-							if server_ping ~= "UP" then
+							if not vps_any_up then
 								local serverip = gateway ~= "" and
 									exec_with_timeout(2, 'resolveip -t 1 -4 ' .. value .. ' | head -n 1') or
 									exec_with_timeout(2, 'resolveip -t 1 -6 ' .. value .. ' | head -n 1')
@@ -1899,24 +1902,27 @@ function interfaces_status()
 									local spe = ut.trim(sys.exec("echo '" .. spt .. "' | grep -i 'error'"))
 									if spe ~= "" or spr ~= "" then
 										server_ping = "DOWN"
-										if connectivity == "OK" then connectivity = "WARNING" end
 									elseif spnb ~= "" then
 										local spt2 = sys.exec("ping -w 1 -c 1 -I " .. ifname .. " " .. serverip)
 										if ut.trim(sys.exec("echo '" .. spt2 .. "' | grep '100% packet loss'")) ~= "" then
 											server_ping = "DOWN"
-											if connectivity == "OK" then connectivity = "WARNING" end
 										else
 											mArray.openmptcprouter["vps_status"] = "UP"
 											server_ping = "UP"
 											latency = ut.trim(sys.exec("echo '" .. spt2 .. "' | cut -d '/' -s -f5 | cut -d '.' -f1"))
+											vps_any_up = true
 										end
 									else
 										mArray.openmptcprouter["vps_status"] = "UP"
 										server_ping = "UP"
 										latency = ut.trim(sys.exec("echo '" .. spt .. "' | cut -d '/' -s -f5 | cut -d '.' -f1"))
+										vps_any_up = true
 									end
 								end
 							end
+						end
+						if not vps_any_up and server_ping == "DOWN" then
+							if connectivity == "OK" then connectivity = "WARNING" end
 						end
 					end
 				end)
@@ -2249,6 +2255,9 @@ function interfaces_only_status()
 			gw_ping = "DOWN"
 			gw_ping6 = "DOWN"
 			connectivity = "ERROR"
+		end
+		if gateway6 == "" and ipv6 ~= "1" and ipv6 ~= "auto" and gw_ping6 == "DOWN" then
+			gw_ping6 = "OFF"
 		end
 
 		if ifname ~= "" then
