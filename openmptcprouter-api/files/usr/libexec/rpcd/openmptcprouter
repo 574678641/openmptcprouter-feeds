@@ -252,9 +252,8 @@ function default_vpn(default_vpn)
 		vpn_intf = "tun0"
 		ucic:set("network","omrvpn","proto","none")
 		if default_vpn == "glorytun_udp" then
-			ucic:set("glorytun","vpn","proto","udp")
-			ucic:set("glorytun","vpn","localip","10.255.254.2")
-			ucic:set("glorytun","vpn","remoteip","10.255.254.1")
+			ucic:set("glorytun-udp","vpn","localip","10.255.254.2")
+			ucic:set("glorytun-udp","vpn","remoteip","10.255.254.1")
 			ucic:set("network","omr6in4","ipaddr","10.255.254.2")
 			ucic:set("network","omr6in4","peeraddr","10.255.254.1")
 		else
@@ -293,11 +292,8 @@ function default_vpn(default_vpn)
 		ucic:commit("network")
 	end
 	-- Set Glorytun settings
-	if default_vpn:match("^glorytun.*") then
-		ucic:set("glorytun","vpn","enable",1)
-	else
-		ucic:set("glorytun","vpn","enable",0)
-	end
+	ucic:set("glorytun","vpn","enable",default_vpn == "glorytun_tcp" and 1 or 0)
+	ucic:set("glorytun-udp","vpn","enable",default_vpn == "glorytun_udp" and 1 or 0)
 	-- Set A Dead Simple VPN settings
 	if default_vpn == "dsvpn" then
 		ucic:set("dsvpn","vpn","enable",1)
@@ -330,6 +326,8 @@ function default_vpn(default_vpn)
 	ucic:set("openmptcprouter","settings","vpn",default_vpn)
 	ucic:save("glorytun")
 	ucic:commit("glorytun")
+	ucic:save("glorytun-udp")
+	ucic:commit("glorytun-udp")
 	ucic:save("mlvpn")
 	ucic:commit("mlvpn")
 	ucic:save("dsvpn")
@@ -417,6 +415,7 @@ function server_settings(server,server_ip,openmptcprouter_vps_key,openmptcproute
 		ucic:set("shadowsocks-libev","sss0","server",server_ip)
 		ucic:set("shadowsocks-rust","sss0","server",server_ip)
 		ucic:set("glorytun","vpn","host",server_ip)
+		ucic:set("glorytun-udp","vpn","host",server_ip)
 		ucic:set("dsvpn","vpn","host",server_ip)
 		ucic:set("mlvpn","general","host",server_ip)
 		local mqvpn_port = "65443"
@@ -446,6 +445,8 @@ function server_settings(server,server_ip,openmptcprouter_vps_key,openmptcproute
 		ucic:commit("xray")
 		ucic:save("glorytun")
 		ucic:commit("glorytun")
+		ucic:save("glorytun-udp")
+		ucic:commit("glorytun-udp")
 		ucic:save("mqvpn")
 		ucic:commit("mqvpn")
 		ucic:save("shadowsocks-libev")
@@ -474,8 +475,12 @@ function set_glorytun(glorytun_key)
 	ucic:set("glorytun","vpn","key",glorytun_key)
 	ucic:set("glorytun","vpn","mptcp",1)
 	ucic:set("glorytun","vpn","chacha20",1)
+	ucic:set("glorytun-udp","vpn","port","65001")
+	ucic:set("glorytun-udp","vpn","key",glorytun_key)
 	ucic:save("glorytun")
 	ucic:commit("glorytun")
+	ucic:save("glorytun-udp")
+	ucic:commit("glorytun-udp")
 end
 
 function set_dsvpn(dsvpn_key)
@@ -952,10 +957,50 @@ function settings_add(args)
 	return { status = "reload" }
 end
 
+local function set_vpn_enabled(vpn, enabled)
+	local value = enabled and "1" or "0"
+	local configs = {}
+
+	if vpn == "all" or vpn:match("^glorytun_tcp.*") then
+		ucic:set("glorytun","vpn","enable",value)
+		configs["glorytun"] = true
+	end
+	if vpn == "all" or vpn:match("^glorytun_udp.*") then
+		ucic:set("glorytun-udp","vpn","enable",value)
+		configs["glorytun-udp"] = true
+	end
+	if vpn == "all" or vpn == "dsvpn" then
+		ucic:set("dsvpn","vpn","enable",value)
+		configs["dsvpn"] = true
+	end
+	if vpn == "all" or vpn == "mlvpn" then
+		ucic:set("mlvpn","general","enable",value)
+		configs["mlvpn"] = true
+	end
+	if vpn == "all" or vpn == "openvpn" then
+		ucic:set("openvpn","omr","enabled",value)
+		configs["openvpn"] = true
+	end
+	if vpn == "all" or vpn == "mqvpn" then
+		ucic:set("mqvpn","settings","enable",value)
+		configs["mqvpn"] = true
+	end
+	if vpn == "all" or vpn == "softethervpn" or vpn == "softether" then
+		ucic:set("softethervpn","openmptcprouter","enable",value)
+		configs["softethervpn"] = true
+	end
+
+	for config, _ in pairs(configs) do
+		ucic:save(config)
+		ucic:commit(config)
+	end
+end
+
 function force_start_vpn(vpn)
 	if vpn == nil or vpn == "" then
 		vpn = ucic:get("openmptcprouter","settings","vpn") or "glorytun_tcp"
 	end
+	set_vpn_enabled(vpn, true)
 	if vpn:match("^glorytun_tcp.*") then
 		sys.exec("/etc/init.d/glorytun start >/dev/null 2>/dev/null")
 	elseif vpn:match("^glorytun_udp.*") then
@@ -978,6 +1023,7 @@ function force_stop_vpn(vpn)
 	if vpn == nil or vpn == "" then
 		vpn = ucic:get("openmptcprouter","settings","vpn") or "glorytun_tcp"
 	end
+	set_vpn_enabled(vpn, false)
 	if vpn == "all" then
 		sys.exec("/etc/init.d/glorytun stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/glorytun-udp stop >/dev/null 2>/dev/null")
@@ -1651,12 +1697,12 @@ function interfaces_status()
 			{"glorytun-udp", "vpn", "glorytun_udp"},
 			{"dsvpn", "vpn", "dsvpn"},
 			{"mlvpn", "general", "mlvpn"},
-			{"openvpn", "omr", "openvpn"},
+			{"openvpn", "omr", "openvpn", "enabled"},
 			{"softethervpn", "openmptcprouter", "softether"},
 			{"mqvpn", "settings", "mqvpn"}
 		}
 		for _, v in ipairs(vpn_checks) do
-			if uci:get(v[1], v[2], "enable") == "1" and current_vpn ~= v[3] then
+			if uci:get(v[1], v[2], v[4] or "enable") == "1" and current_vpn ~= v[3] then
 				mArray.openmptcprouter["multi_vpn"] = true
 				break
 			end
