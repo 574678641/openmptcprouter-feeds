@@ -20,7 +20,7 @@ generate_config() {
 	local tun_name log_level kill_switch reconnect reconnect_interval route_via_server no_routes
 	local cipher
 	local control_port control_addr
-	local scheduler auto_wan reinjection_control reinjection_mode fec_enable fec_scheme
+	local scheduler cc auto_wan reinjection_control reinjection_mode fec_enable fec_scheme
 	local dns_csv
 
 	config_get_bool enable settings enable 0
@@ -79,6 +79,7 @@ generate_config() {
 	config_get control_addr control control_addr '127.0.0.1'
 
 	config_get scheduler multipath scheduler 'wlb'
+	config_get cc multipath cc ''
 	config_get_bool auto_wan multipath auto_wan 1
 	config_get_bool reinjection_control multipath reinjection_control 0
 	config_get reinjection_mode multipath reinjection_mode ''
@@ -126,6 +127,7 @@ generate_config() {
 		echo ''
 		echo '[Multipath]'
 		echo "Scheduler = $scheduler"
+		[ -n "$cc" ] && echo "CC = $cc"
 		[ "$reinjection_control" = "1" ] && echo "ReinjectionControl = true"
 		[ -n "$reinjection_mode" ] && echo "ReinjectionMode = $reinjection_mode"
 		[ "$fec_enable" = "1" ] && echo "FecEnable = true"

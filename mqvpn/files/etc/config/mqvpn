@@ -28,7 +28,7 @@ config control 'control'
 	option control_addr '127.0.0.1'
 
 config multipath 'multipath'
-	option scheduler 'wlb'
+	option scheduler 'minrtt'
 	option auto_wan '1'
 #	option reinjection_control '1'
 #	option reinjection_mode 'default'
