@@ -733,7 +733,10 @@ function wizard_add(args)
 
 				_set_or_delete("network", name, "type", _as_string(itf.type, ""))
 				_set_or_delete("network", name, "masterintf", _as_string(itf.masterintf, ""))
-				_set_or_delete("network", name, "device", _as_string(itf.ifname, ""))
+				local _vlan = _as_string(itf.vlan, "")
+				local _dev = _as_string(itf.ifname, "")
+				if _vlan ~= "" then _dev = _dev .. "." .. _vlan end
+				_set_or_delete("network", name, "device", _dev)
 				_set_or_delete("network", name, "ip6addr", _as_string(itf.ip6addr, ""))
 				_set_or_delete("network", name, "ip6gw", _as_string(itf.ip6gw, ""))
 				_set_or_delete("network", name, "ipv6", _as_string(itf.ipv6, "0"))
