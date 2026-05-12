@@ -176,12 +176,9 @@ _set_server_default_route_common() {
 		multipath_config_route=$(_get_multipath_config $OMR_TRACKER_INTERFACE)
 
 		if [ -n "$serverip" ] && [ -n "$gateway_var" ] && [ -n "$OMR_TRACKER_DEVICE" ] && [ "$multipath_config_route" != "off" ]; then
-			local existing_route=$($ip_cmd route show dev "$OMR_TRACKER_DEVICE" metric 1 2>/dev/null | grep "$serverip" | grep "$gateway_var")
+			local existing_route=$($ip_cmd route show "$serverip" 2>/dev/null | grep "via ${gateway_var}" | grep "dev ${OMR_TRACKER_DEVICE}")
 			if [ -z "$existing_route" ]; then
 				[ "$debug" = "true" ] && _log "Set server $server ($serverip) default route via $gateway_var"
-				if [ "$($ip_cmd r show $serverip | grep nexthop)" != "" ]; then
-					$ip_cmd r delete $serverip >/dev/null 2>&1
-				fi
 				$ip_cmd route replace $serverip via $gateway_var dev $OMR_TRACKER_DEVICE metric 1 $initcwrwnd >/dev/null 2>&1
 			fi
 		fi
@@ -513,7 +510,7 @@ _set_server_route_common() {
 		[ -z "$interface_current_config" ] && interface_current_config="up"
 
 		if [ -n "$serverip" ] && [ -n "$OMR_TRACKER_DEVICE" ] && [ -n "$gateway_var" ] && [ "$multipath_config_route" != "off" ] && [ "$interface_current_config" = "up" ] && [ "$interface_up" = "true" ]; then
-			local existing_route=$($ip_cmd route show dev "$OMR_TRACKER_DEVICE" metric "$metric" 2>/dev/null | grep "$serverip" | grep "$gateway_var")
+			local existing_route=$($ip_cmd route show "$serverip" 2>/dev/null | grep "via ${gateway_var}" | grep "dev ${OMR_TRACKER_DEVICE}")
 			if [ -z "$existing_route" ]; then
 				[ "$debug" = "true" ] && _log "Set server $server ($serverip) route via $gateway_var metric $metric"
 				$ip_cmd route replace "$serverip" via "$gateway_var" dev "$OMR_TRACKER_DEVICE" metric "$metric" $initcwrwnd >/dev/null 2>&1
