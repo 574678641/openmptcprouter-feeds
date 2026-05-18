@@ -43,6 +43,14 @@ export OMR_TRACKER_TYPE
 
 #dscp=56   # set DSCP CS7 (56) in outgoing packets
 
+# Kill child processes (post-tracking subshells) when this tracker is terminated,
+# so orphaned sleeps don't accumulate as duplicate-looking processes.
+_omr_exit() {
+	jobs -p | xargs -r kill 2>/dev/null
+	exit 0
+}
+trap '_omr_exit' INT TERM EXIT
+
 #initial_hosts="$OMR_TRACKER_HOSTS"
 #initial_hosts6="$OMR_TRACKER_HOSTS6"
 initial_timeout="$OMR_TRACKER_TIMEOUT"

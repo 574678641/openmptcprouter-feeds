@@ -521,6 +521,12 @@ reload_service() {
 }
 
 restart_service() {
-	stop
-	start "$@"
+	if [ -n "$1" ]; then
+		procd_kill "omr-tracker" "$1" 2>/dev/null
+		sleep 2
+		start "$@"
+	else
+		stop
+		start
+	fi
 }
