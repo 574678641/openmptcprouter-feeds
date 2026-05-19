@@ -8,7 +8,21 @@
 # This script ensures only the proxy set in openmptcprouter.settings.proxy is enabled
 
 configured_proxy="$(uci -q get openmptcprouter.settings.proxy)"
-[ -z "$configured_proxy" ] && exit 0
+if [ -z "$configured_proxy" ]; then
+	if [ "$(uci -q get v2ray.main.enabled 2>/dev/null)" = "1" ] && [ -f /etc/init.d/v2ray ]; then
+		configured_proxy="v2ray"
+	elif [ "$(uci -q get xray.main.enabled 2>/dev/null)" = "1" ] && [ -f /etc/init.d/xray ]; then
+		configured_proxy="xray"
+	elif [ "$(uci -q get shadowsocks-libev.sss0.disabled 2>/dev/null)" = "0" ] && [ -f /etc/init.d/shadowsocks-libev ]; then
+		configured_proxy="shadowsocks"
+	elif [ "$(uci -q get shadowsocks-rust.sss0.disabled 2>/dev/null)" = "0" ] && [ -f /etc/init.d/shadowsocks-rust ]; then
+		configured_proxy="shadowsocks-rust"
+	else
+		configured_proxy="none"
+	fi
+	uci -q set "openmptcprouter.settings.proxy=${configured_proxy}"
+	uci -q commit openmptcprouter
+fi
 
 case "$configured_proxy" in
 	shadowsocks)

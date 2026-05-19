@@ -8,7 +8,27 @@
 # This script ensures only the VPN set in openmptcprouter.settings.vpn is enabled
 
 configured_vpn="$(uci -q get openmptcprouter.settings.vpn)"
-[ -z "$configured_vpn" ] && exit 0
+if [ -z "$configured_vpn" ]; then
+	if [ "$(uci -q get glorytun.vpn.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/glorytun ]; then
+		configured_vpn="glorytun_tcp"
+	elif [ "$(uci -q get glorytun-udp.vpn.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/glorytun-udp ]; then
+		configured_vpn="glorytun_udp"
+	elif [ "$(uci -q get mlvpn.general.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/mlvpn ]; then
+		configured_vpn="mlvpn"
+	elif [ "$(uci -q get mqvpn.settings.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/mqvpn ]; then
+		configured_vpn="mqvpn"
+	elif [ "$(uci -q get dsvpn.vpn.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/dsvpn ]; then
+		configured_vpn="dsvpn"
+	elif [ "$(uci -q get softethervpn.openmptcprouter.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/softethervpnclient ]; then
+		configured_vpn="softethervpn"
+	elif [ "$(uci -q get openvpn.omr.enabled 2>/dev/null)" = "1" ] && [ -f /etc/init.d/openvpn ]; then
+		configured_vpn="openvpn"
+	else
+		configured_vpn="none"
+	fi
+	uci -q set "openmptcprouter.settings.vpn=${configured_vpn}"
+	uci -q commit openmptcprouter
+fi
 
 changed=0
 
