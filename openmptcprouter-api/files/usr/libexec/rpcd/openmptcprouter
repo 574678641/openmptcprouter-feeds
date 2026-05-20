@@ -55,6 +55,7 @@ function remove_server(serverdel)
 	ucic:commit("openmptcprouter")
 	ucic:save("network")
 	ucic:commit("network")
+	os.execute("ubus call network reload 2>&1 >/dev/null")
 end
 
 function add_interface(add_interface_ifname)
