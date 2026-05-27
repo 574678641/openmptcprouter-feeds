@@ -15,9 +15,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
   release:
     name: Create release
     needs: build-deb
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/mptcp-bpf-bkup-v')
     permissions:
       contents: write
