@@ -168,6 +168,27 @@ if [ -f /etc/init.d/unbound ] && [ "$(uci -q get unbound.@unbound[0].enabled)" =
 	fi
 fi
 
+if [ -f /etc/init.d/unbound ] && [ "$(uci -q get unbound.@unbound[0].enabled)" = "1" ] && [ "$(uci -q get openmptcprouter.settings.external_check)" != "0" ]; then
+	ROOT_CHECK=$(dig +short +time=3 +tries=1 google.fr @198.41.0.4 2>/dev/null)
+	if [ -n "$ROOT_CHECK" ] && [ -z "$(uci -q get dhcp.dnsmasq1.server | grep '1\.1\.1\.1')" ]; then
+		_log "DNS port 53 hijacked by ISP, bypass unbound and use 1.1.1.1..."
+		uci -q del_list dhcp.dnsmasq1.server='127.0.0.1#5353'
+		uci -q add_list dhcp.dnsmasq1.server='1.1.1.1'
+		uci -q set openmptcprouter.settings.dns_hijacked=1
+		uci -q commit openmptcprouter
+		uci -q commit dhcp
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1
+	elif [ -z "$ROOT_CHECK" ] && [ "$(uci -q get openmptcprouter.settings.dns_hijacked)" = "1" ]; then
+		_log "DNS port 53 hijack resolved, restoring unbound..."
+		uci -q del_list dhcp.dnsmasq1.server='1.1.1.1'
+		uci -q add_list dhcp.dnsmasq1.server='127.0.0.1#5353'
+		uci -q del openmptcprouter.settings.dns_hijacked
+		uci -q commit openmptcprouter
+		uci -q commit dhcp
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1
+	fi
+fi
+
 if [ -f /etc/init.d/dnsmasq ]; then
 	if [ "$(pgrep -f dnsmasq)" = "" ]; then
 		_log "Can't find dnsmasq, restart it..."
