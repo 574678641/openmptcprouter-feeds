@@ -105,7 +105,7 @@ if [ "$(uci -q show network.lan | grep multipath)" != "" ]; then
 fi
 
 lanif="eth0"
-if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ]; then
+if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ] || [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep 'mt2500')" ]; then
 	lanif="eth0"
 elif [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4" ] || [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4-poe" ]; then
 	lanif="wan"
