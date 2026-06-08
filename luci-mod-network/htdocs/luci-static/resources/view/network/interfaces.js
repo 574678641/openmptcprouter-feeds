@@ -1225,6 +1225,11 @@ return view.extend({
 				o.datatype = 'uinteger';
 				o.placeholder = '100';
 
+				o = nettools.replaceOption(s, 'advanced', form.Value, 'cost', _('Cost'), _('Path cost used for interface selection. A lower value makes the path more preferable.'));
+				o.datatype = 'uinteger';
+				o.optional = true;
+				o.placeholder = '0';
+
 				o = nettools.replaceOption(s,'advanced', form.ListValue, 'multipath', _('Multipath setting'), _('Only one interface must be set as Master.'));
 				o.value('on',_('Enabled'));
 				o.value('off',_('Disabled'));
