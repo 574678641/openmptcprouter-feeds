@@ -327,7 +327,7 @@ return view.extend({
 				ula: uci.get('network', 'globals', 'ula_prefix') || '',
 				default_vpn: uci.get('openmptcprouter', 'settings', 'vpn') || 'openvpn',
 				default_proxy: uci.get('openmptcprouter', 'settings', 'proxy') || 'shadowsocks-rust',
-				encryption: uci.get('openmptcprouter', 'settings', 'encryption') || 'chacha20-ietf-poly1305',
+				encryption: uci.get('openmptcprouter', 'settings', 'encryption') || (has.aes ? 'aes-256-gcm' : 'chacha20-ietf-poly1305'),
 				shadowsocks_key: uci.get('shadowsocks-libev', 'sss0', 'key') || '',
 				shadowsocks2022_key: uci.get('shadowsocks-rust', 'sss0', 'password') || '',
 				glorytun_key: uci.get('glorytun', 'vpn', 'key') || '',
@@ -357,7 +357,7 @@ return view.extend({
 		m.chain('network');
 		m.chain('firewall');
 		if (has.ssLibev) m.chain('shadowsocks-libev');
-		if (has.ssRust)  m.chain('shadowsocks-rust');
+		if (has.ssRust || has.xray) m.chain('shadowsocks-rust');
 		if (has.v2ray)   m.chain('v2ray');
 		if (has.xray)    m.chain('xray');
 		if (has.glorytun || has.glorytunUdp) m.chain('glorytun');
@@ -477,8 +477,7 @@ return view.extend({
 			'xray-trojan':        ['XRay Trojan',            has.xray],
 			'xray-socks':         ['XRay Socks',             has.xray],
 			'xray-shadowsocks':   ['XRay Shadowsocks 2022',  has.xray],
-			'shadowsocks-rust':   ['Shadowsocks-Rust 2022',  has.ssRust],
-			'shadowsocks-go':     ['Shadowsocks-Rust 2022',  has.ssRust]
+			'shadowsocks-rust':   ['Shadowsocks-Rust 2022',  has.ssRust]
 		};
 		(availProxy.length ? availProxy : Object.keys(proxyDefs)).forEach(function(p) {
 			var k = (p === 'shadowsocks-go') ? 'shadowsocks-rust' : p;
@@ -486,6 +485,7 @@ return view.extend({
 			if (d && d[1]) o.value(k, d[0]);
 		});
 		o.value('none', _('None'));
+		o.default = 'shadowsocks-rust';
 
 		if (has.ssLibev) {
 			o = s.taboption('proxy', form.Value, '_ss_key', _('ShadowSocks key'));
@@ -633,6 +633,7 @@ return view.extend({
 		o = s.option(form.Value, 'netmask', _('IPv4 netmask'));
 		o.datatype = 'ip4addr';
 		o.default = '255.255.255.0';
+		o.rmempty = false;
 		o.depends('proto', 'static');
 
 		/* ── Step 4: WAN ───────────────────────────────── */
@@ -738,6 +739,7 @@ return view.extend({
 		o = s.option(form.Value, 'netmask', _('IPv4 netmask'));
 		o.datatype = 'ip4addr';
 		o.default = '255.255.255.0';
+		o.rmempty = false;
 		o.depends('proto', 'static');
 		o.depends('_type', 'macvlan');
 
@@ -1114,7 +1116,7 @@ return view.extend({
 					ula: uci.get('network', 'globals', 'ula_prefix') || '',
 					default_vpn: uci.get('openmptcprouter', 'settings', 'vpn') || 'glorytun_tcp',
 					default_proxy: uci.get('openmptcprouter', 'settings', 'proxy') || 'shadowsocks-rust',
-					encryption: uci.get('openmptcprouter', 'settings', 'encryption') || 'chacha20-ietf-poly1305',
+					encryption: uci.get('openmptcprouter', 'settings', 'encryption') || (has.aes ? 'aes-256-gcm' : 'chacha20-ietf-poly1305'),
 					shadowsocks_key: uci.get('shadowsocks-libev', 'sss0', 'key') || '',
 					shadowsocks2022_key: uci.get('shadowsocks-rust', 'sss0', 'password') || '',
 					glorytun_key: uci.get('glorytun', 'vpn', 'key') || '',
