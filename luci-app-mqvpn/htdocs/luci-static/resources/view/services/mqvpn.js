@@ -21,9 +21,9 @@ return L.view.extend({
 		s = m.section(form.NamedSection, 'server', 'server', _('Server'));
 		s.addremove = false;
 
-		o = s.option(form.Value, 'ip', _('Server IP'));
-		o.description = _('IPv4 or IPv6 address of the MQVPN server');
-		o.datatype = 'ipaddr';
+		o = s.option(form.Value, 'ip', _('Server address'));
+		o.description = _('IP address or hostname of the MQVPN server');
+		o.datatype = 'host';
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'port', _('Server port'));
@@ -47,6 +47,7 @@ return L.view.extend({
 		s.addremove = false;
 
 		o = s.option(form.Value, 'user', _('User'));
+		o.description = _('Optional: identifies this client on the server (shown in status/logs)');
 		o.rmempty = true;
 
 		o = s.option(form.Value, 'key', _('Key'));
@@ -66,6 +67,16 @@ return L.view.extend({
 		o.value('warn',  _('Warning'));
 		o.value('error', _('Error'));
 		o.default = 'info';
+
+		o = s.option(form.Value, 'mtu', _('MTU'));
+		o.description = _('TUN MTU cap in bytes (1280–9000, leave empty for auto)');
+		o.datatype = 'range(1280, 9000)';
+		o.placeholder = 'auto';
+		o.rmempty = true;
+
+		o = s.option(form.Flag, 'manage_routes', _('Manage routes'));
+		o.description = _('Uncheck on router/embedded integrations to keep host routes untouched');
+		o.default = o.enabled;
 
 		o = s.option(form.Flag, 'kill_switch', _('Kill switch'));
 		o.description = _('Block all traffic if the VPN tunnel goes down');
@@ -112,8 +123,12 @@ return L.view.extend({
 		s.addremove = false;
 
 		o = s.option(form.ListValue, 'scheduler', _('Scheduler'));
-		o.value('wlb',    _('Weighted Load Balancing'));
-		o.value('minrtt', _('Minimum RTT'));
+		o.value('wlb',         _('Weighted Load Balancing'));
+		o.value('wlb_udp_pin', _('WLB with UDP pinning'));
+		o.value('minrtt',      _('Minimum RTT'));
+		o.value('wrtt',        _('Weighted RTT'));
+		o.value('backup_fec',  _('Backup with FEC'));
+		o.value('rap',         _('RAP'));
 		o.default = 'wlb';
 
 		o = s.option(form.ListValue, 'cc', _('Congestion control'));
