@@ -8,7 +8,11 @@
                     "get_interfaces",
                     "get_status"
                 ]
-            }
+            },
+            "uci": ["omr-metrics"]
+        },
+        "write": {
+            "uci": ["omr-metrics"]
         }
     }
 }

@@ -13,11 +13,13 @@ PKG_RELEASE:=1
 include $(INCLUDE_DIR)/package.mk
 
 MY_DEPENDS := \
-    omr-tracker
+    omr-tracker \
+    curl \
+    jsonfilter
 
 define Package/$(PKG_NAME)
-SECTION:=OMR
-CATEGORY:=OMR
+SECTION:=net
+CATEGORY:=Network
 DEPENDS:=$(foreach p,$(MY_DEPENDS),+$(p))
 TITLE:=OMR-Tracker metrics
 endef
@@ -35,6 +37,9 @@ endef
 
 define Package/$(PKG_NAME)/install
 	$(CP) ./files/* $(1)/
+	$(INSTALL_BIN) ./files/usr/bin/omr-metrics-send $(1)/usr/bin/omr-metrics-send
+	$(INSTALL_BIN) ./files/usr/bin/omr-weight-sync $(1)/usr/bin/omr-weight-sync
+	$(INSTALL_BIN) ./files/etc/init.d/omr-metrics $(1)/etc/init.d/omr-metrics
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)))

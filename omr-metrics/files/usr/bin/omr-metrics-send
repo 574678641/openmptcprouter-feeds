@@ -1,0 +1,151 @@
+#!/bin/sh
+# Copyright (C) 2026 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter
+# SPDX-License-Identifier: GPL-3.0
+#
+# Daemon: reads /tmp/metrics/*.json produced by the 040-metrics post-tracking
+# hook and POSTs each payload to POST /metrics on every configured VPS server.
+# Runs in a tight poll loop; interval is controlled by OMR_METRICS_INTERVAL
+# (seconds, default 30) which is set by the init.d script.
+
+METRICS_DIR="/tmp/metrics"
+STATE_DIR="/tmp/omr-metrics-send"
+INTERVAL="${OMR_METRICS_INTERVAL:-30}"
+
+_log() {
+	logger -t "omr-metrics-send" "$@"
+}
+
+_is_ip6() {
+	case "$1" in *:*) return 0 ;; esac
+	return 1
+}
+
+# Obtain a Bearer token via POST /token and save it in UCI.
+# Prints the token on stdout; prints nothing on failure.
+_login() {
+	local servername="$1" server="$2" serverport="$3" username="$4" password="$5"
+	local auth token
+
+	if _is_ip6 "$server"; then
+		auth=$(curl -6 --max-time 10 -s -k \
+			-H "accept: application/json" \
+			-H "Content-Type: application/x-www-form-urlencoded" \
+			-X POST -d "username=${username}&password=${password}" \
+			"https://[${server}]:${serverport}/token" 2>/dev/null)
+	else
+		auth=$(curl --max-time 10 -s -k \
+			-H "accept: application/json" \
+			-H "Content-Type: application/x-www-form-urlencoded" \
+			-X POST -d "username=${username}&password=${password}" \
+			"https://${server}:${serverport}/token" 2>/dev/null)
+	fi
+
+	token=$(echo "$auth" | jsonfilter -q -e '@.access_token' 2>/dev/null)
+	if [ -n "$token" ]; then
+		uci -q set "openmptcprouter.${servername}.token=${token}"
+	else
+		_log "login failed for server ${servername} (${server})"
+	fi
+	printf '%s' "$token"
+}
+
+# POST one JSON payload to /metrics on a single server.
+# Retries once with a fresh token on HTTP 401.
+# Returns 0 on HTTP 200, 1 on any other outcome.
+_post_metrics() {
+	local servername="$1" server="$2" serverport="$3" payload="$4"
+	local token username password url http_code
+
+	token=$(uci -q get "openmptcprouter.${servername}.token" 2>/dev/null)
+	username=$(uci -q get "openmptcprouter.${servername}.username" 2>/dev/null)
+	password=$(uci -q get "openmptcprouter.${servername}.password" 2>/dev/null)
+
+	if [ -z "$token" ]; then
+		token=$(_login "$servername" "$server" "$serverport" "$username" "$password")
+	fi
+	[ -z "$token" ] && return 1
+
+	if _is_ip6 "$server"; then
+		url="https://[${server}]:${serverport}/metrics"
+	else
+		url="https://${server}:${serverport}/metrics"
+	fi
+
+	http_code=$(curl --max-time 10 -s -k \
+		-o /dev/null -w "%{http_code}" \
+		-H "accept: application/json" \
+		-H "Authorization: Bearer ${token}" \
+		-H "Content-Type: application/json" \
+		-X POST -d "${payload}" "$url" 2>/dev/null)
+
+	if [ "$http_code" = "401" ]; then
+		token=$(_login "$servername" "$server" "$serverport" "$username" "$password")
+		[ -z "$token" ] && return 1
+		http_code=$(curl --max-time 10 -s -k \
+			-o /dev/null -w "%{http_code}" \
+			-H "accept: application/json" \
+			-H "Authorization: Bearer ${token}" \
+			-H "Content-Type: application/json" \
+			-X POST -d "${payload}" "$url" 2>/dev/null)
+	fi
+
+	[ "$http_code" = "200" ] && return 0
+
+	# 404/501 means the metrics module is not loaded on the VPS.
+	# Mark this server as unavailable so we stop trying until restarted.
+	if [ "$http_code" = "404" ] || [ "$http_code" = "501" ]; then
+		_log "metrics endpoint not available on ${server} (HTTP ${http_code}) — disabling until restart"
+		touch "${STATE_DIR}/${servername}.no_metrics" 2>/dev/null
+		return 1
+	fi
+
+	_log "POST ${url}: HTTP ${http_code:-timeout}"
+	return 1
+}
+
+# One send cycle: read all JSON files and dispatch to every configured server.
+_send_cycle() {
+	[ -d "$METRICS_DIR" ] || return
+
+	# Extract section names of type "server" from UCI without loading config_load
+	# (avoids clobbering the global config state if called from within callbacks).
+	local server_names
+	server_names=$(uci -q show openmptcprouter 2>/dev/null | \
+		sed -n 's/^openmptcprouter\.\([^.=][^.=]*\)=server$/\1/p')
+	[ -z "$server_names" ] && return
+
+	for json_file in "${METRICS_DIR}"/*.json; do
+		[ -f "$json_file" ] || continue
+		local payload
+		payload=$(cat "$json_file" 2>/dev/null)
+		[ -z "$payload" ] && continue
+
+		for servername in $server_names; do
+			local disabled serverport server_ips
+			disabled=$(uci -q get "openmptcprouter.${servername}.disabled" 2>/dev/null)
+			[ "$disabled" = "1" ] && continue
+
+			# Skip servers where the metrics endpoint was found unavailable.
+			[ -f "${STATE_DIR}/${servername}.no_metrics" ] && continue
+
+			serverport=$(uci -q get "openmptcprouter.${servername}.port" 2>/dev/null)
+			[ -z "$serverport" ] && serverport="65500"
+
+			# UCI list items each appear on their own line in `uci show` output.
+			server_ips=$(uci -q show "openmptcprouter.${servername}" 2>/dev/null | \
+				sed -n "s/^openmptcprouter\.[^.]*\.ip='\(.*\)'$/\1/p")
+
+			for server in $server_ips; do
+				[ -n "$server" ] && \
+					_post_metrics "$servername" "$server" "$serverport" "$payload"
+			done
+		done
+	done
+}
+
+mkdir -p "$STATE_DIR"
+_log "started (interval=${INTERVAL}s)"
+while true; do
+	_send_cycle
+	sleep "$INTERVAL"
+done

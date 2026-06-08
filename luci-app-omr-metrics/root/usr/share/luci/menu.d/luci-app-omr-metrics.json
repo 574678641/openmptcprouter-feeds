@@ -9,5 +9,16 @@
         "depends": {
             "acl": ["luci-app-omr-metrics"]
         }
+    },
+    "admin/services/omr-tracker/metrics-settings": {
+        "title": "Metrics Settings",
+        "order": 41,
+        "action": {
+            "type": "view",
+            "path": "omr-metrics/settings"
+        },
+        "depends": {
+            "acl": ["luci-app-omr-metrics"]
+        }
     }
 }

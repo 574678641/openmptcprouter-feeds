@@ -4,6 +4,10 @@
 METRICS_DIR="/tmp/metrics"
 [ -d "$METRICS_DIR" ] || mkdir -p "$METRICS_DIR"
 
+case "$OMR_TRACKER_INTERFACE" in
+	omrvpn|OWVPN*) exit 0 ;;
+esac
+
 # Collect modem signal quality if applicable
 _get_modem_signal() {
 	local proto device result
@@ -476,6 +480,10 @@ _get_bbr_stats
 _get_bandwidth_usage
 _compute_congestion
 
+MPTCP_WEIGHT=$(uci -q get "network.${OMR_TRACKER_INTERFACE}.weight" 2>/dev/null)
+INTERFACE_COST=$(uci -q get "network.${OMR_TRACKER_INTERFACE}.cost" 2>/dev/null)
+INTERFACE_ASN=$(uci -q get "openmptcprouter.${OMR_TRACKER_INTERFACE}.asn" 2>/dev/null)
+
 # Write JSON atomically (write to tmp then move)
 _tmp="${METRICS_DIR}/.${OMR_TRACKER_INTERFACE}.tmp"
 cat > "$_tmp" <<EOF
@@ -548,6 +556,9 @@ cat > "$_tmp" <<EOF
 		"rx_bps": $(_jval "$BW_RX_BPS"),
 		"tx_bps": $(_jval "$BW_TX_BPS")
 	},
+	"weight": $(_jval "$MPTCP_WEIGHT"),
+	"cost": $(_jval "$INTERFACE_COST"),
+	"asn": $(_jstr "$INTERFACE_ASN"),
 	"timestamp": $(date +%s)
 }
 EOF
