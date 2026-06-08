@@ -228,7 +228,7 @@ if [ "$multipath_config" = "master" ]; then
 		fi
 	fi
 	if [ "$master_setting" = "balancing" ]; then
-		if { { [ -n "$OMR_TRACKER_DEVICE_IP" ] && [ "$(ip route show default | grep weight)" = "" ]; } || { [ -n "$OMR_TRACKER_DEVICE_IP6" ] && [ "$(ip -6 route show default | grep weight)" = "" ]; }; } && [ "$defaultgw_setting" != "0" ]; then
+		if { { [ -n "$OMR_TRACKER_DEVICE_IP" ] && [ "$(ip route show default metric 1 | grep "$OMR_TRACKER_DEVICE")" = "" ]; } || { [ -n "$OMR_TRACKER_DEVICE_IP6" ] && [ "$(ip -6 route show default metric 1 | grep "$OMR_TRACKER_DEVICE")" = "" ]; }; } && [ "$defaultgw_setting" != "0" ]; then
 			if [ -n "$omrvpn_intf" ] && [ -n "$OMR_TRACKER_DEVICE_IP" ] && [ "$(ip route show default metric 0 | awk '/default/ {print $5}' | grep $omrvpn_intf)" = "" ]; then
 				routesbalancing=""
 				routesbalancingbackup=""
@@ -351,6 +351,9 @@ if [ "$(sysctl -qen net.mptcp.mptcp_enabled | tr -d '\n')" = "1" ] || [ "$(sysct
 		elif [ "$multipath_status" != "$multipath_config" ]; then
 			_log "Multipath $OMR_TRACKER_DEVICE ($OMR_TRACKER_INTERFACE) switched to $multipath_config (from $multipath_status)"
 			multipath "$OMR_TRACKER_DEVICE" "$multipath_config"
+			if [ -n "$OMR_TRACKER_DEVICE" ] && [ "$(uci -q get network.$OMR_TRACKER_INTERFACE.force_link)" != "0" ]; then
+				/etc/init.d/mptcp reload "$OMR_TRACKER_DEVICE"
+			fi
 		fi
 	}
 fi
