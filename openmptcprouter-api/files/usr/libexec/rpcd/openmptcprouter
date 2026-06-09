@@ -247,7 +247,7 @@ function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspee
 	local ul = tonumber(uploadspeed) or 0
 	local sqm_on = tostring(sqmenabled) == "1"
 
-	if proto ~= "other" then
+	if proto ~= "other" and proto ~= "" then
 		ucic:set("network",intf,"proto",proto)
 	end
 	ucic:set("network",intf,"ipaddr",ipaddr)
