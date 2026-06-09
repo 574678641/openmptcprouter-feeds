@@ -376,6 +376,7 @@ return view.extend({
 		s.addbtntitle = _('Add a new server');
 
 		o = s.option(form.DynamicList, 'ip', _('Server IP'));
+		o.rmempty = false;
 		o.datatype = 'ipaddr';
 		o.description = _('Server IP will be set for proxy and VPN');
 		o.write = function(sid, val) {
@@ -386,12 +387,15 @@ return view.extend({
 		};
 
 		o = s.option(form.Value, 'username', _('Server username'));
+		o.rmempty = false;
 		o.description = _('API username to retrieve personnalized settings from the server.');
 
 		o = s.option(form.Value, 'password', _('Server key'));
+		o.rmempty = false;
 		o.description = _('Key to configure and retrieve others keys from Server.');
 
 		o = s.option(form.Flag, 'master', _('Set server as master'));
+		o.rmempty = false;
 		o.description = _('Only one server can be master.');
 		o.write = function(sid, val) {
 			uci.sections('openmptcprouter', 'server', function(sec) {
@@ -402,6 +406,7 @@ return view.extend({
 		};
 
 		o = s.option(form.Flag, 'disabled', _('Disable server'));
+		o.rmempty = false;
 
 		/* ── Step 2: Settings (tabbed) ─────────────────── */
 		s = m.section(form.NamedSection, 'settings', 'main', _('Settings'));
@@ -422,6 +427,7 @@ return view.extend({
 		o.remove = function() {};
 
 		o = s.taboption('general', form.ListValue, 'encryption', _('Encryption'));
+		o.rmempty = false;
 		o.value('none', _('None'));
 		o.value('aes-256-gcm', 'AES-256-GCM');
 		o.value('chacha20-ietf-poly1305', 'chacha20');
@@ -434,6 +440,7 @@ return view.extend({
 		o.depends('_show_adv', '1');
 
 		o = s.taboption('general', form.Flag, '_force_retrieve', _('Force retrieve settings'));
+		o.rmempty = false;
 		o.description = _('Force retrieve all keys from server.');
 		o.depends('_show_adv', '1');
 		o.cfgvalue = function() { return '0'; };
@@ -444,12 +451,14 @@ return view.extend({
 
 		// ── IPv6 ──
 		o = s.taboption('ipv6', form.ListValue, 'disable_ipv6', _('Enable IPv6'));
+		o.rmempty = false;
 		o.value('1', _('Disabled'));
 		o.value('0', _('Enabled'));
 		o.description = _('Disable if server doesn\'t provide IPv6.');
 		o.depends('_show_adv', '1');
 
 		o = s.taboption('ipv6', form.Value, '_ula_prefix', _('IPv6 Prefix'));
+		o.rmempty = false;
 		o.description = _('Public IPv6 prefix only with one server.');
 		o.depends('_show_adv', '1');
 		o.cfgvalue = function() { return uci.get('network', 'globals', 'ula_prefix'); };
@@ -457,11 +466,13 @@ return view.extend({
 		o.remove = function() {};
 
 		o = s.taboption('ipv6', form.Flag, 'dns64', _('Enable DNS64'));
+		o.rmempty = false;
 		o.description = _('Enable if host supports NAT64.');
 		o.depends('_show_adv', '1');
 
 		// ── Proxy ──
 		o = s.taboption('proxy', form.ListValue, 'proxy', _('Default Proxy'));
+		o.rmempty = false;
 		o.description = _('Proxy for TCP (and UDP for V2Ray/XRay).');
 		o.depends('_show_adv', '1');
 		var availProxy = L.toArray(uci.get('openmptcprouter', 'vps', 'available_proxy'));
@@ -489,6 +500,7 @@ return view.extend({
 
 		if (has.ssLibev) {
 			o = s.taboption('proxy', form.Value, '_ss_key', _('ShadowSocks key'));
+			o.rmempty = false;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('shadowsocks-libev', 'sss0', 'key'); };
 			o.write = function(sid, val) { uci.set('shadowsocks-libev', 'sss0', 'key', val); };
@@ -496,6 +508,7 @@ return view.extend({
 		}
 		if (has.xray || has.ssRust) {
 			o = s.taboption('proxy', form.Value, '_ss2022_key', _('ShadowSocks 2022 key'));
+			o.rmempty = false;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('shadowsocks-rust', 'sss0', 'password'); };
 			o.write = function(sid, val) { uci.set('shadowsocks-rust', 'sss0', 'password', val); };
@@ -503,6 +516,7 @@ return view.extend({
 		}
 		if (has.v2ray) {
 			o = s.taboption('proxy', form.Value, '_v2ray_user', _('V2Ray user id'));
+			o.rmempty = false;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('v2ray', 'omrout', 's_vmess_user_id'); };
 			o.write = function(sid, val) { uci.set('v2ray', 'omrout', 's_vmess_user_id', val); };
@@ -510,6 +524,7 @@ return view.extend({
 		}
 		if (has.xray) {
 			o = s.taboption('proxy', form.Value, '_xray_user', _('XRay user id'));
+			o.rmempty = false;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('xray', 'omrout', 's_vmess_user_id'); };
 			o.write = function(sid, val) { uci.set('xray', 'omrout', 's_vmess_user_id', val); };
@@ -517,6 +532,7 @@ return view.extend({
 		}
 		if (has.xray || has.v2ray) {
 			o = s.taboption('proxy', form.Flag, '_v2ray_udp', _('V2Ray/XRay UDP'));
+			o.rmempty = false;
 			o.description = _('Use V2Ray/XRay for UDP too');
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() {
@@ -530,6 +546,7 @@ return view.extend({
 			o.remove = function() {};
 
 			o = s.taboption('proxy', form.ListValue, '_xray_transport', _('XRay Transport'));
+			o.rmempty = false;
 			o.value('tcp', 'TCP');
 			o.value('grpc', 'gRPC');
 			o.value('xhttp', 'XHTTP');
@@ -551,6 +568,7 @@ return view.extend({
 		vpnKeyOpts.forEach(function(def) {
 			if (!def[0]) return;
 			o = s.taboption('vpn', form.Value, def[1], def[2]);
+			o.rmempty = false;
 			o.description = _('Key is retrieved from server API by default.');
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get(def[3], def[4], def[5]); };
@@ -559,6 +577,7 @@ return view.extend({
 		});
 
 		o = s.taboption('vpn', form.ListValue, 'vpn', _('Default VPN'));
+		o.rmempty = false;
 		o.description = _('VPN for ICMP (and UDP with Shadowsocks proxy).');
 		o.depends('_show_adv', '1');
 		var vpnDefs = {
@@ -581,6 +600,7 @@ return view.extend({
 
 		if (has.mqvpn) {
 			o = s.taboption('vpn', form.ListValue, '_mqvpn_scheduler', _('MQVPN scheduler'));
+			o.rmempty = false;
 			o.depends({ '_show_adv': '1', 'vpn': 'mqvpn' });
 			o.value('wlb',    _('Weighted Load Balancing'));
 			o.value('minrtt', _('Minimum RTT'));
@@ -592,6 +612,7 @@ return view.extend({
 
 		// ── MPTCP over VPN ──
 		o = s.taboption('mptcpvpn', form.ListValue, 'mptcpovervpn', _('MPTCP over VPN'));
+		o.rmempty = false;
 		o.description = _('Use when MPTCP is blocked by your ISP.');
 		o.depends('_show_adv', '1');
 		if (has.openvpn) o.value('openvpn', 'OpenVPN');
@@ -600,6 +621,7 @@ return view.extend({
 
 		// ── Country ──
 		o = s.taboption('country', form.ListValue, 'country', _('Country'));
+		o.rmempty = false;
 		o.description = _('For China: accessible DNS and disable DNSSEC.');
 		o.depends('_show_adv', '1');
 		o.value('world', _('World'));
@@ -617,16 +639,20 @@ return view.extend({
 		s.filter = function(sid) { return zoneLan.indexOf(sid) !== -1; };
 
 		o = s.option(form.Value, 'label', _('Label'));
+		o.rmempty = false;
 		o.optional = true;
 
 		o = s.option(form.ListValue, 'proto', _('Protocol'));
+		o.rmempty = false;
 		o.value('static', _('Static address'));
 		o.value('dhcp', _('DHCP'));
 
 		o = s.option(form.ListValue, 'device', _('Physical interface'));
+		o.rmempty = false;
 		physDevs.forEach(function(d) { o.value(d); });
 
 		o = s.option(form.Value, 'ipaddr', _('IPv4 address'));
+		o.rmempty = false;
 		o.datatype = 'ip4addr';
 		o.depends('proto', 'static');
 
@@ -670,10 +696,12 @@ return view.extend({
 		};
 
 		o = s.option(form.Value, 'label', _('Label'));
+		o.rmempty = false;
 		o.optional = true;
 
 		// Type
 		o = s.option(form.ListValue, '_type', _('Type'));
+		o.rmempty = false;
 		o.value('normal', _('Normal'));
 		o.value('macvlan', _('MacVLAN'));
 		o.value('bridge', _('Bridge'));
@@ -685,11 +713,13 @@ return view.extend({
 
 		// MacVLAN master — type=macvlan
 		o = s.option(form.ListValue, 'masterintf', _('MacVLAN master'));
+		o.rmempty = false;
 		physDevs.forEach(function(d) { o.value(d); });
 		o.depends('_type', 'macvlan');
 
 		// Protocol — type=normal|bridge
 		o = s.option(form.ListValue, 'proto', _('Protocol'));
+		o.rmempty = false;
 		o.value('static', _('Static address'));
 		o.value('dhcp', _('DHCP'));
 		o.value('dhcpv6', _('DHCPv6'));
@@ -704,6 +734,7 @@ return view.extend({
 
 		// Physical interface — proto=static|dhcp|dhcpv6
 		o = s.option(form.ListValue, '_intf', _('Physical interface'));
+		o.rmempty = false;
 		physDevs.forEach(function(d) { o.value(d); });
 		o.depends('proto', 'static');
 		o.depends('proto', 'dhcp');
@@ -718,6 +749,7 @@ return view.extend({
 		};
 
 		o = s.option(form.Value, '_vlan', _('VLAN'));
+		o.rmempty = false;
 		o.optional = true;
 		o.datatype = 'uinteger';
 		o.placeholder = _('Optional');
@@ -732,6 +764,7 @@ return view.extend({
 
 		// IPv4 — proto=static OR type=macvlan
 		o = s.option(form.Value, 'ipaddr', _('IPv4 address'));
+		o.rmempty = false;
 		o.datatype = 'ip4addr';
 		o.depends('proto', 'static');
 		o.depends('_type', 'macvlan');
@@ -744,18 +777,21 @@ return view.extend({
 		o.depends('_type', 'macvlan');
 
 		o = s.option(form.Value, 'gateway', _('IPv4 gateway'));
+		o.rmempty = false;
 		o.datatype = 'ip4addr';
 		o.depends('proto', 'static');
 		o.depends('_type', 'macvlan');
 
 		// IPv6 — proto=static OR type=macvlan
 		o = s.option(form.Value, 'ip6addr', _('IPv6 address'));
+		o.rmempty = false;
 		o.datatype = 'ip6addr';
 		o.optional = true;
 		o.depends('proto', 'static');
 		o.depends('_type', 'macvlan');
 
 		o = s.option(form.Value, 'ip6gw', _('IPv6 gateway'));
+		o.rmempty = false;
 		o.datatype = 'ip6addr';
 		o.optional = true;
 		o.depends('proto', 'static');
@@ -763,6 +799,7 @@ return view.extend({
 
 		// Device NCM — proto=ncm
 		o = s.option(form.ListValue, '_device_ncm', _('Device'));
+		o.rmempty = false;
 		ttyAll.forEach(function(d) { o.value(d); });
 		o.depends('proto', 'ncm');
 		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
@@ -770,6 +807,7 @@ return view.extend({
 
 		// Device QMI — proto=qmi
 		o = s.option(form.ListValue, '_device_qmi', _('Device'));
+		o.rmempty = false;
 		ttyCdc.forEach(function(d) { o.value(d); });
 		o.depends('proto', 'qmi');
 		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
@@ -777,6 +815,7 @@ return view.extend({
 
 		// Device ModemManager — proto=modemmanager
 		o = s.option(form.ListValue, '_device_mm', _('Device'));
+		o.rmempty = false;
 		alltty.forEach(function(d) { o.value(d); });
 		o.depends('proto', 'modemmanager');
 		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
@@ -784,18 +823,21 @@ return view.extend({
 
 		// APN — proto=ncm|qmi|modemmanager only
 		o = s.option(form.Value, 'apn', _('APN'));
+		o.rmempty = false;
 		o.depends('proto', 'ncm');
 		o.depends('proto', 'qmi');
 		o.depends('proto', 'modemmanager');
 
 		// PIN code — proto=ncm|qmi|modemmanager only
 		o = s.option(form.Value, 'pincode', _('PIN code'));
+		o.rmempty = false;
 		o.depends('proto', 'ncm');
 		o.depends('proto', 'qmi');
 		o.depends('proto', 'modemmanager');
 
 		// Service type — proto=ncm only
 		o = s.option(form.ListValue, 'mode', _('Service Type'));
+		o.rmempty = false;
 		o.value('', _('Modem default'));
 		o.value('preferlte', _('Prefer LTE'));
 		o.value('preferumts', _('Prefer UMTS'));
@@ -807,6 +849,7 @@ return view.extend({
 
 		// Authentication — proto=qmi|pppoe only
 		o = s.option(form.ListValue, 'auth', _('Authentication Type'));
+		o.rmempty = false;
 		o.value('none', _('NONE'));
 		o.value('pap', _('PAP'));
 		o.value('chap', _('CHAP'));
@@ -817,11 +860,13 @@ return view.extend({
 
 		// PAP/CHAP — proto=ncm|qmi|pppoe only
 		o = s.option(form.Value, 'username', _('PAP/CHAP username'));
+		o.rmempty = false;
 		o.depends('proto', 'ncm');
 		o.depends('proto', 'qmi');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'password', _('PAP/CHAP password'));
+		o.rmempty = false;
 		o.password = true;
 		o.depends('proto', 'ncm');
 		o.depends('proto', 'qmi');
@@ -829,6 +874,7 @@ return view.extend({
 
 		// Modem init timeout — proto=ncm|qmi only
 		o = s.option(form.Value, 'delay', _('Modem init timeout'));
+		o.rmempty = false;
 		o.datatype = 'uinteger';
 		o.optional = true;
 		o.depends('proto', 'ncm');
@@ -837,6 +883,7 @@ return view.extend({
 		// ── Always visible WAN fields ──
 
 		o = s.option(form.ListValue, 'multipath', _('Multipath TCP'));
+		o.rmempty = false;
 		o.value('on', _('Enabled'));
 		o.value('off', _('Disabled'));
 		o.value('master', _('Master'));
@@ -844,6 +891,7 @@ return view.extend({
 		o.default = 'on';
 
 		o = s.option(form.Value, '_ttl', _('Force TTL'));
+		o.rmempty = false;
 		o.datatype = 'uinteger';
 		o.optional = true;
 		o.description = _('65 often solves LTE tethering detection.');
@@ -855,12 +903,14 @@ return view.extend({
 		o.remove = function(sid) { uci.unset('network', sid + '_dev', 'ttl'); };
 
 		o = s.option(form.Flag, '_multipathvpn', _('MPTCP over VPN'));
+		o.rmempty = false;
 		o.cfgvalue = function(sid) { return uci.get('openmptcprouter', sid, 'multipathvpn'); };
 		o.write = function(sid, val) { uci.set('openmptcprouter', sid, 'multipathvpn', val); };
 		o.remove = function(sid) { uci.set('openmptcprouter', sid, 'multipathvpn', '0'); };
 
 		if (has.sqm) {
 			o = s.option(form.Flag, '_sqm_enabled', _('Enable SQM'));
+			o.rmempty = false;
 			o.default = '0';
 			o.cfgvalue = function(sid) { return uci.get('sqm', sid, 'enabled') || '0'; };
 			o.write = function(sid, val) { uci.set('sqm', sid, 'enabled', val); };
@@ -869,22 +919,26 @@ return view.extend({
 
 		if (has.qos) {
 			o = s.option(form.Flag, '_qos_enabled', _('Enable QoS'));
+			o.rmempty = false;
 			o.cfgvalue = function(sid) { return uci.get('qos', sid, 'enabled'); };
 			o.write = function(sid, val) { uci.set('qos', sid, 'enabled', val); };
 			o.remove = function(sid) { uci.set('qos', sid, 'enabled', '0'); };
 		}
 
 		o = s.option(form.Flag, '_testspeed', _('Calculate speed'));
+		o.rmempty = false;
 		o.description = _('Run an automatic speedtest.');
 		o.cfgvalue = function(sid) { return uci.get('openmptcprouter', sid, 'testspeed'); };
 		o.write = function(sid, val) { uci.set('openmptcprouter', sid, 'testspeed', val); };
 		o.remove = function(sid) { uci.set('openmptcprouter', sid, 'testspeed', '0'); };
 
 		o = s.option(form.Value, 'downloadspeed', _('Download speed (Kb/s)'));
+		o.rmempty = false;
 		o.datatype = 'uinteger';
 		o.default = '0';
 
 		o = s.option(form.Value, 'uploadspeed', _('Upload speed (Kb/s)'));
+		o.rmempty = false;
 		o.datatype = 'uinteger';
 		o.default = '0';
 
