@@ -1715,6 +1715,7 @@ function interfaces_status()
 				mArray.openmptcprouter["vps_omr_version"] = uci:get("openmptcprouter", s[".name"], "omr_version") or ""
 				mArray.openmptcprouter["vps_kernel"] = uci:get("openmptcprouter",s[".name"],"kernel") or ""
 				mArray.openmptcprouter["vps_machine"] = uci:get("openmptcprouter",s[".name"],"machine") or ""
+				mArray.openmptcprouter["vps_whois"] = uci:get("openmptcprouter",s[".name"],"asn") or ""
 				timeout = uci:get("openmptcprouter","settings","status_vps_timeout") or "1"
 				if uci:get("openmptcprouter",s[".name"],"admin_error") == "1" then
 					mArray.openmptcprouter["vps_admin_error"] = true
@@ -2276,14 +2277,22 @@ function interfaces_status()
 				if whois == "" and mArray.openmptcprouter["external_check"] ~= false and mArray.openmptcprouter["dns"] then
 					whois = ut.trim(exec_with_timeout(2, "whois " .. publicIP .. " | grep -i 'netname' | awk '{print $2}'"))
 				end
-				if publicIP == mArray.openmptcprouter["wan_addr"] then mArray.openmptcprouter["direct_output"] = true end
+				if publicIP == mArray.openmptcprouter["wan_addr"] then
+					mArray.openmptcprouter["direct_output"] = true
+					mArray.openmptcprouter["wan_whois"] = whois
+				end
 			end
 			if publicIP6 ~= "" then
 				whois6 = uci:get("openmptcprouter",interface,"asn") or ""
 				if whois6 == "" and mArray.openmptcprouter["external_check"] ~= false and mArray.openmptcprouter["dns"] then
 					whois6 = ut.trim(exec_with_timeout(2, "whois " .. publicIP6 .. " | grep -i 'netname' | awk '{print $2}'"))
 				end
-				if publicIP6 == mArray.openmptcprouter["wan_addr6"] then mArray.openmptcprouter["direct_output"] = true end
+				if publicIP6 == mArray.openmptcprouter["wan_addr6"] then
+					mArray.openmptcprouter["direct_output"] = true
+					if not mArray.openmptcprouter["wan_whois"] or mArray.openmptcprouter["wan_whois"] == "" then
+						mArray.openmptcprouter["wan_whois"] = whois6
+					end
+				end
 			end
 			if ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
 				mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
