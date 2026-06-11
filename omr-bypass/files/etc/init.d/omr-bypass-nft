@@ -65,6 +65,11 @@ _add_proto_without_ndpi() {
 	echo "$protoname" >> /usr/share/omr-bypass/omr-bypass-proto.lst
 }
 
+_uci_add_list_unique() {
+	local key="$1" val="$2"
+	uci -q get "$key" 2>/dev/null | tr ' ' '\n' | grep -qxF "$val" || uci -q add_list "$key"="$val"
+}
+
 _bypass_ip() {
 	local ip=$1
 	local type=$2
@@ -75,14 +80,14 @@ _bypass_ip() {
 	valid_ip6=$( valid_subnet6 $ip)
 	if [ "$tcpudp" = "all" ]; then
 		if [ "$valid_ip4" = "ok" ]; then
-			uci -q add_list firewall.omr_dst_bypass_${type}_4.entry="$ip"
+			_uci_add_list_unique firewall.omr_dst_bypass_${type}_4.entry "$ip"
 			uci -q set firewall.omr_dst_bypass_${type}_4.enabled='1'
 			for zone in $(_get_firewall_zones); do
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_4_${zone}.enabled='1'
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_4_accept_${zone}.enabled='1'
 			done
 		elif [ "$valid_ip6" = "ok" ]; then
-			uci -q add_list firewall.omr_dst_bypass_${type}_6.entry="$ip"
+			_uci_add_list_unique firewall.omr_dst_bypass_${type}_6.entry "$ip"
 			uci -q set firewall.omr_dst_bypass_${type}_6.enabled='1'
 			for zone in $(_get_firewall_zones); do
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_6_${zone}.enabled='1'
@@ -91,14 +96,14 @@ _bypass_ip() {
 		fi
 	else
 		if [ "$valid_ip4" = "ok" ]; then
-			uci -q add_list firewall.omr_dst_bypass_${type}_4.entry="$ip"
+			_uci_add_list_unique firewall.omr_dst_bypass_${type}_4.entry "$ip"
 			uci -q set firewall.omr_dst_bypass_${type}_4.enabled='1'
 			for zone in $(_get_firewall_zones); do
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_4_${zone}_${tcpudp}.enabled='1'
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_4_accept_${zone}_${tcpudp}.enabled='1'
 			done
 		elif [ "$valid_ip6" = "ok" ]; then
-			uci -q add_list firewall.omr_dst_bypass_${type}_6.entry="$ip"
+			_uci_add_list_unique firewall.omr_dst_bypass_${type}_6.entry "$ip"
 			uci -q set firewall.omr_dst_bypass_${type}_6.enabled='1'
 			for zone in $(_get_firewall_zones); do
 				uci -q set firewall.omr_dst_bypass_${type}_dstip_6_${zone}_${tcpudp}.enabled='1'
@@ -230,10 +235,8 @@ _bypass_mac() {
 	fi
 	for zone in $(_get_firewall_zones); do
 		for ipv46 in $protocol; do
-			uci -q batch <<-EOF
-				add_list firewall.omr_dst_bypass_${intf}_mac_${ipv46}_${zone}.src_mac="$mac"
-				set firewall.omr_dst_bypass_${intf}_mac_${ipv46}_${zone}.enabled='1'
-			EOF
+			uci -q set firewall.omr_dst_bypass_${intf}_mac_${ipv46}_${zone}.enabled='1'
+			_uci_add_list_unique firewall.omr_dst_bypass_${intf}_mac_${ipv46}_${zone}.src_mac "$mac"
 		done
 	done
 }
@@ -256,15 +259,11 @@ _bypass_lan_ip() {
 		valid_ip4=$(valid_subnet4 $ip)
 		valid_ip6=$(valid_subnet6 $ip)
 		if [ "$valid_ip4" = "ok" ]; then
-			uci -q batch <<-EOF
-				add_list firewall.omr_dst_bypass_${intf}_srcip_4_${zone}.src_ip="$ip"
-				set firewall.omr_dst_bypass_${intf}_srcip_4_${zone}.enabled='1'
-			EOF
+			uci -q set firewall.omr_dst_bypass_${intf}_srcip_4_${zone}.enabled='1'
+			_uci_add_list_unique firewall.omr_dst_bypass_${intf}_srcip_4_${zone}.src_ip "$ip"
 		elif [ "$valid_ip6" = "ok" ] && [ "$disableipv6" = "0" ]; then
-			uci -q batch <<-EOF
-				add_list firewall.omr_dst_bypass_${intf}_srcip_6_${zone}.src_ip="$ip"
-				set firewall.omr_dst_bypass_${intf}_srcip_6_${zone}.enabled='1'
-			EOF
+			uci -q set firewall.omr_dst_bypass_${intf}_srcip_6_${zone}.enabled='1'
+			_uci_add_list_unique firewall.omr_dst_bypass_${intf}_srcip_6_${zone}.src_ip "$ip"
 		fi
 	done
 }
@@ -296,18 +295,14 @@ _bypass_dest_port() {
 	for zone in $(_get_firewall_zones); do
 		if [ "$proto" = "tcp" ] || [ "$proto" = "tcp udp" ]; then
 			for ipv46 in $protocol; do
-				uci -q batch <<-EOF
-					add_list firewall.omr_dst_bypass_${intf}_dstport_tcp_${ipv46}_${zone}.dest_port="$dport"
-					set firewall.omr_dst_bypass_${intf}_dstport_tcp_${ipv46}_${zone}.enabled='1'
-				EOF
+				uci -q set firewall.omr_dst_bypass_${intf}_dstport_tcp_${ipv46}_${zone}.enabled='1'
+				_uci_add_list_unique firewall.omr_dst_bypass_${intf}_dstport_tcp_${ipv46}_${zone}.dest_port "$dport"
 			done
 		fi
 		if [ "$proto" = "udp" ] || [ "$proto" = "tcp udp" ]; then
 			for ipv46 in $protocol; do
-				uci -q batch <<-EOF
-					add_list firewall.omr_dst_bypass_${intf}_dstport_udp_${ipv46}_${zone}.dest_port="$dport"
-					set firewall.omr_dst_bypass_${intf}_dstport_udp_${ipv46}_${zone}.enabled='1'
-				EOF
+				uci -q set firewall.omr_dst_bypass_${intf}_dstport_udp_${ipv46}_${zone}.enabled='1'
+				_uci_add_list_unique firewall.omr_dst_bypass_${intf}_dstport_udp_${ipv46}_${zone}.dest_port "$dport"
 			done
 		fi
 	done
@@ -340,18 +335,14 @@ _bypass_src_port() {
 	for zone in $(_get_firewall_zones); do
 		if [ "$proto" = "tcp" ] || [ "$proto" = "tcp udp" ]; then
 			for ipv46 in $protocol; do
-				uci -q batch <<-EOF
-					add_list firewall.omr_dst_bypass_${intf}_srcport_tcp_${ipv46}_${zone}.src_port="$sport"
-					set firewall.omr_dst_bypass_${intf}_srcport_tcp_${ipv46}_${zone}.enabled='1'
-				EOF
+				uci -q set firewall.omr_dst_bypass_${intf}_srcport_tcp_${ipv46}_${zone}.enabled='1'
+				_uci_add_list_unique firewall.omr_dst_bypass_${intf}_srcport_tcp_${ipv46}_${zone}.src_port "$sport"
 			done
 		fi
 		if [ "$proto" = "udp" ] || [ "$proto" = "tcp udp" ]; then
 			for ipv46 in $protocol; do
-				uci -q batch <<-EOF
-					add_list firewall.omr_dst_bypass_${intf}_srcport_udp_${ipv46}_${zone}.src_port="$sport"
-					set firewall.omr_dst_bypass_${intf}_srcport_udp_${ipv46}_${zone}.enabled='1'
-				EOF
+				uci -q set firewall.omr_dst_bypass_${intf}_srcport_udp_${ipv46}_${zone}.enabled='1'
+				_uci_add_list_unique firewall.omr_dst_bypass_${intf}_srcport_udp_${ipv46}_${zone}.src_port "$sport"
 			done
 		fi
 	done
@@ -550,27 +541,36 @@ _bypass_proto_without_ndpi() {
 				#fi
 				_intf_rules_all_rules ${proto} ${intfid} ${tcpudp}
 			fi
+			local _nft4="" _nft6="" _nft4n=0 _nft6n=0
 			for ip in $ALLIPS; do
 				valid_ip4=$( valid_subnet4 $ip )
 				valid_ip6=$( valid_subnet6 $ip )
 				if [ "$valid_ip4" = "ok" ]; then
 					if [ "$vpn" != "1" ]; then
-						#ipset -q add bypass_$proto $ip
-						uci add_list firewall.bypass_${proto}.entry="$ip"
+						_nft4="${_nft4:+$_nft4, }$ip"
+						_nft4n=$((_nft4n + 1))
+						if [ "$_nft4n" -ge 64 ]; then
+							printf 'nft add element inet fw4 bypass_%s { %s } 2>/dev/null\n' "$proto" "$_nft4" >> /etc/firewall.omr-bypass
+							_nft4="" _nft4n=0
+						fi
 					else
-						#ipset -q add omr_dst_bypass_$intf $ip
-						uci -q add_list firewall.omr_dst_bypass_${intf}_4.entry="$ip"
+						_uci_add_list_unique firewall.omr_dst_bypass_${intf}_4.entry "$ip"
 					fi
 				elif [ "$valid_ip6" = "ok" ]; then
 					if [ "$vpn" != "1" ]; then
-						#ipset -q add bypass6_$proto $ip
-						uci -q add_list firewall.bypass6_${proto}.entry=$ip
+						_nft6="${_nft6:+$_nft6, }$ip"
+						_nft6n=$((_nft6n + 1))
+						if [ "$_nft6n" -ge 64 ]; then
+							printf 'nft add element inet fw4 bypass6_%s { %s } 2>/dev/null\n' "$proto" "$_nft6" >> /etc/firewall.omr-bypass
+							_nft6="" _nft6n=0
+						fi
 					else
-						#ipset -q add omr6_dst_bypass_$intf $ip
-						uci -q add_list firewall.omr_dst_bypass_${intf}_6.entry="$ip"
+						_uci_add_list_unique firewall.omr_dst_bypass_${intf}_6.entry "$ip"
 					fi
 				fi
 			done
+			[ -n "$_nft4" ] && printf 'nft add element inet fw4 bypass_%s { %s } 2>/dev/null\n' "$proto" "$_nft4" >> /etc/firewall.omr-bypass
+			[ -n "$_nft6" ] && printf 'nft add element inet fw4 bypass6_%s { %s } 2>/dev/null\n' "$proto" "$_nft6" >> /etc/firewall.omr-bypass
 			
 			uci -q commit firewall
 		fi
