@@ -63,8 +63,12 @@ if [ -n "$(grep z8109ax /etc/board.json)" ] && [ "$(uci -q get network.modem1.pr
 	[ -n "$(uci -q changes network)" ] && uci -q commit network
 fi
 
-# Force unbound DNS resolution on IPv4 is no IPv6 set
-if [ -n "$(uci -q show unbound)" ]; then
+# Force unbound DNS resolution on IPv4 if n IPv6 set
+_unbound_lc=$(uci -q get openmptcprouter.settings.unbound_lc)
+_unbound_now=$(date +%s)
+if [ -n "$(uci -q show unbound)" ] && { [ -z "$_unbound_lc" ] || [ $((_unbound_now - _unbound_lc)) -gt 60 ]; }; then
+	uci -q set openmptcprouter.settings.unbound_lc="$_unbound_now"
+	uci -q commit openmptcprouter
 	if [ -n "$(ip -6 r show scope global)" ]; then
 		uci -q set unbound.ub_main.protocol='mixed'
 	else

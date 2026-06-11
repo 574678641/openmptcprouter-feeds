@@ -340,6 +340,13 @@ OMR_TRACKER_INTERFACE_PROTO="$(uci -q get network.${OMR_TRACKER_INTERFACE}.proto
 OMR_TRACKER_PREV_STATUS=""
 [ "$OMR_TRACKER_INTERFACE_PROTO" = "modemmanager" ] && sleep $(uci -q get network.${OMR_TRACKER_INTERFACE}.delay || echo '120')
 
+_host4_raw=""
+_host4_resolved=""
+_host4_resolve_time=0
+_host6_raw=""
+_host6_resolved=""
+_host6_resolve_time=0
+
 # main loop
 while true; do
 	# setup tracker variables
@@ -492,7 +499,13 @@ while true; do
 							config_foreach _httping_server server $OMR_TRACKER_DEVICE_IP
 						fi
 						if [ "$serverip_ping" = false ] && [ -n "$OMR_TRACKER_HOST" ]; then
-							OMR_TRACKER_HOST=$(resolveip -4 -t 5 $OMR_TRACKER_HOST | head -n 1 | tr -d "\n")
+							_resolve_now=$(date +%s)
+							if [ "$OMR_TRACKER_HOST" != "$_host4_raw" ] || [ -z "$_host4_resolved" ] || [ $((_resolve_now - _host4_resolve_time)) -gt 300 ]; then
+								_host4_raw="$OMR_TRACKER_HOST"
+								_host4_resolved=$(resolveip -4 -t 5 "$OMR_TRACKER_HOST" | head -n 1 | tr -d "\n")
+								_host4_resolve_time=$_resolve_now
+							fi
+							[ -n "$_host4_resolved" ] && OMR_TRACKER_HOST="$_host4_resolved"
 							if [ -n "$OMR_TRACKER_HOST" ]; then
 								if [ "$OMR_TRACKER_INTERFACE_PROTO" = "3g" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "qmi" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "ncm" ]; then
 									# Check if route is not used
@@ -606,7 +619,13 @@ while true; do
 						fi
 
 						if [ "$serverip_ping" = false ] && [ -n "$OMR_TRACKER_HOST6" ]; then
-							OMR_TRACKER_HOST6=$(resolveip -6 -t 5 $OMR_TRACKER_HOST6 | head -n 1 | tr -d "\n")
+							_resolve_now=$(date +%s)
+							if [ "$OMR_TRACKER_HOST6" != "$_host6_raw" ] || [ -z "$_host6_resolved" ] || [ $((_resolve_now - _host6_resolve_time)) -gt 300 ]; then
+								_host6_raw="$OMR_TRACKER_HOST6"
+								_host6_resolved=$(resolveip -6 -t 5 "$OMR_TRACKER_HOST6" | head -n 1 | tr -d "\n")
+								_host6_resolve_time=$_resolve_now
+							fi
+							[ -n "$_host6_resolved" ] && OMR_TRACKER_HOST6="$_host6_resolved"
 							if [ -n "$OMR_TRACKER_HOST6" ]; then
 								if [ "$OMR_TRACKER_INTERFACE_PROTO" = "3g" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "qmi" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "ncm" ]; then
 									# Check if route is not used
