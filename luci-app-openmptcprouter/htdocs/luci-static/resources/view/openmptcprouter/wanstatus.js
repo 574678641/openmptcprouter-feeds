@@ -1,6 +1,5 @@
 'use strict';
 'require view';
-'require form';
 'require poll';
 'require rpc';
 
@@ -19,7 +18,8 @@ return view.extend({
 	pollData: function() {
 		poll.add(L.bind(function() {
 			return callOMRStatus().then(L.bind(function(data) {
-				this.renderStatus(data || {});
+				this.lastData = data || {};
+				this.renderStatus(this.lastData);
 			}, this)).catch(function() {
 				/* Ignore transient poll errors */
 			});
@@ -128,21 +128,28 @@ return view.extend({
 
 		var wanip = wan.wanip || '';
 		var gateway = wan.gateway || '';
+		var ipaddr = wan.ipaddr || '';
+		var ip6addr = wan.ip6addr || '';
+		var wanip6 = wan.wanip6 || '';
 		if (anonymize) {
 			if (wanip && !this.testPrivateIP(wanip)) wanip = this.replaceLastNChars(wanip, 'x', 6);
 			if (gateway && !this.testPrivateIP(gateway)) gateway = this.replaceLastNChars(gateway, 'x', 6);
+			if (ipaddr && !this.testPrivateIP(ipaddr)) ipaddr = this.replaceLastNChars(ipaddr, 'x', 6);
+			if (ip6addr) ip6addr = this.replaceLastNChars(ip6addr, 'x', 6);
+			if (wanip6) wanip6 = this.replaceLastNChars(wanip6, 'x', 6);
 		}
 
 		var details = '';
-		if (wan.ipaddr) details += _('ip address:') + ' <strong>' + this.esc(wan.ipaddr) + '</strong><br />';
-		if (wan.ip6addr) details += _('ipv6 address:') + ' <strong>' + this.esc(wan.ip6addr) + '</strong><br />';
+		if (ipaddr) details += _('ip address:') + ' <strong>' + this.esc(ipaddr) + '</strong><br />';
+		if (ip6addr) details += _('ipv6 address:') + ' <strong>' + this.esc(ip6addr) + '</strong><br />';
 		if (wanip) details += _('wan address:') + ' <strong>' + this.esc(wanip) + '</strong><br />';
-		if (wan.wanip6) details += _('wan ipv6 address:') + ' <strong>' + this.esc(wan.wanip6) + '</strong><br />';
+		if (wanip6) details += _('wan ipv6 address:') + ' <strong>' + this.esc(wanip6) + '</strong><br />';
 		if (wan.ifname && wan.ifname !== wan.label) details += _('interface:') + ' ' + this.esc(wan.ifname) + '<br />';
 		if (gateway) details += _('gateway:') + ' <strong>' + this.esc(gateway) + '</strong><br />';
 		if (wan.latency) details += _('latency:') + ' ' + this.esc(wan.latency) + ' ms<br />';
 		details += _('multipath:') + ' ' + this.esc(wan.multipath || 'off') + '<br />';
 		if (wan.operator) details += _('operator:') + ' <strong>' + this.esc(wan.operator) + '</strong><br />';
+		if (wan.whois && wan.whois !== 'unknown') details += _('ASN:') + ' ' + this.esc(wan.whois) + '<br />';
 		if (wan.phonenumber) details += _('number:') + ' <strong>' + this.esc(wan.phonenumber) + '</strong><br />';
 		if (wan.donglestate) details += _('state:') + ' <strong>' + this.esc(wan.donglestate) + '</strong><br />';
 
@@ -166,55 +173,43 @@ return view.extend({
 			document.head.appendChild(link);
 		}
 
-		this.m = new form.Map('openmptcprouter', _('Settings'));
-		var s = this.m.section(form.NamedSection, 'settings', 'settings');
-		s.addremove = false;
-		var o = s.option(form.Flag, '_anonymize', _('Anonymize public IPs'));
-		o.default = '0';
-		o.cfgvalue = L.bind(function() {
-			return this.getCookie('anonymize') === 'true' ? '1' : '0';
-		}, this);
-		o.write = L.bind(function(sid, val) {
-			this.setCookie('anonymize', val === '1' ? 'true' : 'false');
-		}, this);
-		o.remove = L.bind(function(sid) {
-			this.setCookie('anonymize', 'false');
-		}, this);
-
-		return this.m.render().then(L.bind(function(formEl) {
-			formEl.insertBefore(
-				E('fieldset', { 'id': 'interface_field', 'class': 'cbi-section' }, [
-					E('div', { 'id': 'omr-status-container' }, E('img', { 'src': L.resource('spinner.gif') }))
-				]),
-				formEl.firstChild
-			);
-			formEl.insertBefore(E('h2', {}, _('Network overview')), formEl.firstChild);
-
-			if (initialData) this.renderStatus(initialData);
-			this.pollData();
-			window.omrSetColorSVG = function(embedId, color) {
-				var embed = document.getElementById(embedId);
-				if (!embed) return;
-				var svg;
-				try {
-					svg = embed.getSVGDocument ? embed.getSVGDocument() : embed.contentDocument;
-				} catch (e) {
-					svg = null;
-				}
-				if (svg) {
-					var back = svg.getElementById('backgound_modem');
-					if (back) back.setAttribute('style', 'fill: ' + color + ';fill-opacity:0.6;');
-				}
-			};
-
-			return formEl;
+		var cb = E('input', { 'type': 'checkbox', 'id': 'omr-anonymize' });
+		cb.checked = this.getCookie('anonymize') === 'true';
+		cb.addEventListener('change', L.bind(function(ev) {
+			this.setCookie('anonymize', ev.target.checked ? 'true' : 'false');
+			if (this.lastData) this.renderStatus(this.lastData);
 		}, this));
-	},
 
-	handleSave: function() {
-		return this.m.parse().then(function() {
-			window.location.reload();
-		});
+		var container = E('div', {}, [
+			E('h2', {}, _('Network overview')),
+			E('fieldset', { 'id': 'interface_field', 'class': 'cbi-section' }, [
+				E('div', { 'id': 'omr-status-container' }, E('img', { 'src': L.resource('spinner.gif') }))
+			]),
+			E('div', { 'class': 'cbi-value' }, [
+				E('label', { 'class': 'cbi-value-title', 'for': 'omr-anonymize' }, _('Anonymize public IPs')),
+				E('div', { 'class': 'cbi-value-field' }, [cb])
+			])
+		]);
+
+		this.lastData = initialData || null;
+		if (initialData) this.renderStatus(initialData);
+		this.pollData();
+		window.omrSetColorSVG = function(embedId, color) {
+			var embed = document.getElementById(embedId);
+			if (!embed) return;
+			var svg;
+			try {
+				svg = embed.getSVGDocument ? embed.getSVGDocument() : embed.contentDocument;
+			} catch (e) {
+				svg = null;
+			}
+			if (svg) {
+				var back = svg.getElementById('backgound_modem');
+				if (back) back.setAttribute('style', 'fill: ' + color + ';fill-opacity:0.6;');
+			}
+		};
+
+		return container;
 	},
 
 	renderStatus: function(data) {
@@ -248,13 +243,17 @@ return view.extend({
 		if (omr.ipv6 === 'enabled' && omr.tun6_state === 'DOWN') routerWarn += _('IPv6 tunnel DOWN') + '<br />';
 
 		var serverAddr = omr.service_addr || '';
+		var vpsHostname = omr.vps_hostname || _('Server');
 		if (anonymize && serverAddr) serverAddr = this.replaceLastNChars(serverAddr, 'x', 6);
-		var serverTitle = String.format('%s (%s)', this.esc(omr.vps_hostname || _('Server')), this.esc(serverAddr || '-'));
+		if (anonymize && vpsHostname && !this.testPrivateIP(vpsHostname) && /^\d+\.\d+\.\d+\.\d+$/.test(vpsHostname))
+			vpsHostname = this.replaceLastNChars(vpsHostname, 'x', 6);
+		var serverTitle = String.format('%s (%s)', this.esc(vpsHostname), this.esc(serverAddr || '-'));
 		var serverStatus = '';
 		if (!omr.service_addr) serverStatus += _('No server defined') + '<br />';
 		if (omr.vps_status === 'DOWN') serverStatus += _('Can\'t ping server') + '<br />';
 		var serverDetails = '';
 		if (omr.vps_omr_version) serverDetails += _('Version') + ' ' + this.esc(omr.vps_omr_version) + '<br />';
+		if (omr.vps_whois && omr.vps_whois !== 'unknown') serverDetails += _('ASN:') + ' ' + this.esc(omr.vps_whois) + '<br />';
 		if (omr.vps_kernel) serverDetails += _('Kernel:') + ' ' + this.esc(omr.vps_kernel) + '<br />';
 		if (omr.vps_loadavg) serverDetails += _('Load:') + ' ' + this.esc(omr.vps_loadavg) + '<br />';
 		if (omr.vps_uptime) serverDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.vps_uptime)) + '<br />';
@@ -278,6 +277,7 @@ return view.extend({
 			var directIp = omr.wan_addr || '';
 			if (anonymize && directIp && !this.testPrivateIP(directIp)) directIp = this.replaceLastNChars(directIp, 'x', 6);
 			var directDetails = directIp ? (_('ip address:') + ' <strong>' + this.esc(directIp) + '</strong><br />') : '';
+			if (omr.wan_whois && omr.wan_whois !== 'unknown') directDetails += _('ASN:') + ' ' + this.esc(omr.wan_whois) + '<br />';
 			temp += '<tr><td><div class="vertdash"></div></td></tr>';
 			temp += '<tr><td><span id="omr-direct">' +
 				this.getNetworkNodeTemplate('<img src="' + L.resource('computer.png') + '" />', _('Direct Output'), 'ok', '', directDetails) +
@@ -327,7 +327,7 @@ return view.extend({
 		}
 	},
 
-	handleSaveApply: null,
 	handleSave: null,
+	handleSaveApply: null,
 	handleReset: null
 });
