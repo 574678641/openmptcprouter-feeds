@@ -241,6 +241,21 @@ function remove_interface(intf)
 	sys.exec("uci -q commit firewall")
 end
 
+function enable_interface(intf, enable)
+	if intf == nil or intf == "" then return end
+	intf = intf:gsub("[^%w_-]+", "")
+	if intf == "" then return end
+	local disabled = (tostring(enable) == "1") and "0" or "1"
+	ucic:set("network", intf, "disabled", disabled)
+	ucic:save("network")
+	ucic:commit("network")
+	if disabled == "1" then
+		sys.exec("ifdown " .. intf .. " >/dev/null 2>/dev/null")
+	else
+		sys.exec("ifup " .. intf .. " >/dev/null 2>/dev/null")
+	end
+end
+
 function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspeed,uploadspeed)
 	-- Set interfaces settings
 	local dl = tonumber(downloadspeed) or 0
@@ -2807,6 +2822,10 @@ local methods = {
 	removeinterface = {
 		args = { intf = "" },
 		call = function(args) remove_interface(args.intf) end
+	},
+	enableinterface = {
+		args = { intf = "", enable = 0 },
+		call = function(args) enable_interface(args.intf, args.enable) end
 	},
 	setinterface = {
 		args = { intf = "", proto = "dhcp", ipaddr = "", netmask = "", gateway = "", sqmenabled = 0, downloadspeed = 0, uploadspeed = 0 },
