@@ -134,6 +134,9 @@ ss_rules_cb() {
 	if [ "$cfgtype" = ss_redir ]; then
 		config_get cfgserver "$cfg" server
 		config_get server "$cfgserver" server
+		local srv_password
+		srv_password=$(uci -q get "shadowsocks-rust.${cfgserver}.password" 2>/dev/null)
+		[ -n "$srv_password" ] || return
 		if [ -z "$ss_redir_servers" ]; then
 			ss_redir_servers="$server"
 		else
