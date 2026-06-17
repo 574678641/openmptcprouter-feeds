@@ -112,6 +112,11 @@ elif [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "
 elif [ "$(grep rockchip /etc/os-release)" != "" ]; then
 	lanif="eth1"
 elif [ "$(grep filogic /etc/os-release)" != "" ]; then
+	if [ -d /sys/class/net/wan ]; then
+		lanif="wan"
+	else
+		lanif="eth1"
+	fi
 	lanif="eth1"
 elif [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep bananapi_bpi-r3)" ]; then
 	lanif="eth0"
