@@ -303,16 +303,26 @@ config_foreach restart_omrtracker interface
 [ -n "$(uci -q changes shadowsocks-rust)" ] && uci -q commit shadowsocks-rust
 [ -n "$(uci -q changes unbound)" ] && uci -q commit unbound
 [ -n "$(uci -q changes dhcp)" ] && uci -q commit dhcp
+_multipath_fix_shared() {
+	[ "$1" = "$_mf_name" ] && return
+	config_get _mf_mp "$1" multipath
+	[ "$_mf_mp" = "off" ] || [ -z "$_mf_mp" ] && return
+	_mf_dev="$(ifstatus "$1" 2>/dev/null | jsonfilter -q -e '@.l3_device' | tr -d '\n')"
+	[ "$_mf_dev" = "$_mf_iface" ] && _mf_skip=1
+}
 multipath_fix() {
 	config_get multipath "$1" multipath
 	[ "$multipath" != "off" ] && return
 	config_get device "$1" device
 	[ "$(echo $device | grep '@')" ] && return
 	interface="$(ifstatus $1 | jsonfilter -q -e '@.l3_device' | tr -d '\n')"
-	[ -n "$interface" ] && [ -z "$(multipath $interface | grep deactivated)" ] && {
-		_log "Fix Multipath status on $1 ($interface)"
-		/etc/init.d/mptcp reload $interface >/dev/null 2>&1
-	}
+	[ -z "$interface" ] && return
+	[ -n "$(multipath $interface | grep deactivated)" ] && return
+	_mf_name="$1" _mf_iface="$interface" _mf_skip=0
+	config_foreach _multipath_fix_shared interface
+	[ "$_mf_skip" = "1" ] && return
+	_log "Fix Multipath status on $1 ($interface)"
+	/etc/init.d/mptcp reload $interface >/dev/null 2>&1
 }
 if [ "$(uci -q get network.globals.multipath)" = "enable" ]; then
 	config_load network
