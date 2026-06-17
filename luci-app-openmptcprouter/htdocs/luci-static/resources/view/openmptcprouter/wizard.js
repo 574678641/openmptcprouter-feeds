@@ -490,17 +490,18 @@ return view.extend({
 			'xray-shadowsocks':   ['XRay Shadowsocks 2022',  has.xray],
 			'shadowsocks-rust':   ['Shadowsocks-Rust 2022',  has.ssRust]
 		};
-		(availProxy.length ? availProxy : Object.keys(proxyDefs)).forEach(function(p) {
-			var k = (p === 'shadowsocks-go') ? 'shadowsocks-rust' : p;
-			var d = proxyDefs[k];
-			if (d && d[1]) o.value(k, d[0]);
+		Object.keys(proxyDefs).forEach(function(p) {
+			var d = proxyDefs[p];
+			var serverHas = !availProxy.length || availProxy.indexOf(p) !== -1 ||
+			                (p === 'shadowsocks-rust' && availProxy.indexOf('shadowsocks-go') !== -1);
+			if (d && d[1] && serverHas) o.value(p, d[0]);
 		});
 		o.value('none', _('None'));
 		o.default = 'shadowsocks-rust';
 
 		if (has.ssLibev) {
 			o = s.taboption('proxy', form.Value, '_ss_key', _('ShadowSocks key'));
-			o.rmempty = false;
+			o.rmempty = true;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('shadowsocks-libev', 'sss0', 'key'); };
 			o.write = function(sid, val) { uci.set('shadowsocks-libev', 'sss0', 'key', val); };
@@ -508,7 +509,7 @@ return view.extend({
 		}
 		if (has.xray || has.ssRust) {
 			o = s.taboption('proxy', form.Value, '_ss2022_key', _('ShadowSocks 2022 key'));
-			o.rmempty = false;
+			o.rmempty = true;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('shadowsocks-rust', 'sss0', 'password'); };
 			o.write = function(sid, val) { uci.set('shadowsocks-rust', 'sss0', 'password', val); };
@@ -516,7 +517,7 @@ return view.extend({
 		}
 		if (has.v2ray) {
 			o = s.taboption('proxy', form.Value, '_v2ray_user', _('V2Ray user id'));
-			o.rmempty = false;
+			o.rmempty = true;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('v2ray', 'omrout', 's_vmess_user_id'); };
 			o.write = function(sid, val) { uci.set('v2ray', 'omrout', 's_vmess_user_id', val); };
@@ -524,7 +525,7 @@ return view.extend({
 		}
 		if (has.xray) {
 			o = s.taboption('proxy', form.Value, '_xray_user', _('XRay user id'));
-			o.rmempty = false;
+			o.rmempty = true;
 			o.depends('_show_adv', '1');
 			o.cfgvalue = function() { return uci.get('xray', 'omrout', 's_vmess_user_id'); };
 			o.write = function(sid, val) { uci.set('xray', 'omrout', 's_vmess_user_id', val); };
