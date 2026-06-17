@@ -99,7 +99,7 @@ _post_metrics() {
 		return 1
 	fi
 
-	_log "POST ${url}: HTTP ${http_code:-timeout}"
+	#_log "POST ${url}: HTTP ${http_code:-timeout}"
 	return 1
 }
 
@@ -131,9 +131,7 @@ _send_cycle() {
 			serverport=$(uci -q get "openmptcprouter.${servername}.port" 2>/dev/null)
 			[ -z "$serverport" ] && serverport="65500"
 
-			# UCI list items each appear on their own line in `uci show` output.
-			server_ips=$(uci -q show "openmptcprouter.${servername}" 2>/dev/null | \
-				sed -n "s/^openmptcprouter\.[^.]*\.ip='\(.*\)'$/\1/p")
+			server_ips=$(uci -q get "openmptcprouter.${servername}.ip" 2>/dev/null)
 
 			for server in $server_ips; do
 				[ -n "$server" ] && \
