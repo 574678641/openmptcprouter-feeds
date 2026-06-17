@@ -92,6 +92,7 @@ generate_config() {
 	config_list_foreach interface dns _append_dns_csv
 
 	[ -z "$ip" ] && { logger -t mqvpn "No server address configured"; return 1; }
+	[ "$ip" = "203.0.113.1" ] && { logger -t mqvpn "Server IP is not configured (placeholder 203.0.113.1)"; return 1; }
 	[ -z "$key" ]     && { logger -t mqvpn "No auth key configured"; return 1; }
 
 	mkdir -p /var/run
