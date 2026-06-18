@@ -177,7 +177,12 @@ while true; do
 			if [ "$type" = "libev" ] && [ "$(uci -q get shadowsocks-libev.ss_rules.disabled)" != "1" ] && [ "$(uci -q get shadowsocks-libev.${server}.key)" != "" ] && [ "$(uci -q get shadowsocks-libev.${server}.server)" != "" ] && [ "$(uci -q get shadowsocks-libev.${server}.disabled)" != "1" ]; then
 				_log "Reload Shadowsocks rules"
 				/etc/init.d/shadowsocks-libev rules_up 2> /dev/null
-				if ! /etc/init.d/shadowsocks-libev rules_exist >/dev/null 2>&1; then
+				_rules_ok=0
+				for _try in 1 2 3; do
+					/etc/init.d/shadowsocks-libev rules_exist >/dev/null 2>&1 && { _rules_ok=1; break; }
+					sleep 2
+				done
+				if [ "$_rules_ok" = "0" ]; then
 					_log "Rules still not set, restart Shadowsocks"
 					/etc/init.d/shadowsocks-libev restart >/dev/null 2>&1
 				fi
@@ -185,7 +190,12 @@ while true; do
 			elif [ "$type" = "rust" ] && [ "$(uci -q get shadowsocks-rust.ss_rules.disabled)" != "1" ] && [ "$(uci -q get shadowsocks-rust.${server}.password)" != "" ] && [ "$(uci -q get shadowsocks-rust.${server}.server)" != "" ] && [ "$(uci -q get shadowsocks-rust.${server}.disabled)" != "1" ]; then
 				_log "Reload Shadowsocks Rust rules"
 				/etc/init.d/shadowsocks-rust rules_up 2> /dev/null
-				if ! /etc/init.d/shadowsocks-rust rules_exist >/dev/null 2>&1; then
+				_rules_ok=0
+				for _try in 1 2 3; do
+					/etc/init.d/shadowsocks-rust rules_exist >/dev/null 2>&1 && { _rules_ok=1; break; }
+					sleep 2
+				done
+				if [ "$_rules_ok" = "0" ]; then
 					_log "Rules still not set, restart Shadowsocks-Rust"
 					/etc/init.d/shadowsocks-rust restart >/dev/null 2>&1
 				fi
