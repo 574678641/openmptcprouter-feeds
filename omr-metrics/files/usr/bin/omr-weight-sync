@@ -25,9 +25,11 @@ _is_weight_scheduler() {
 }
 
 # Obtain a Bearer token via POST /token and save it in UCI.
+# $1 = full UCI key to store the token (e.g. "omr-metrics.settings.token"
+#      or "openmptcprouter.<name>.token")
 # Prints the token on stdout; prints nothing on failure.
 _login() {
-	local servername="$1" server="$2" serverport="$3" username="$4" password="$5"
+	local uci_token_key="$1" server="$2" serverport="$3" username="$4" password="$5"
 	local auth token
 
 	if _is_ip6 "$server"; then
@@ -46,7 +48,7 @@ _login() {
 
 	token=$(echo "$auth" | jsonfilter -q -e '@.access_token' 2>/dev/null)
 	if [ -n "$token" ]; then
-		uci -q set "openmptcprouter.${servername}.token=${token}"
+		uci -q set "${uci_token_key}=${token}"
 	fi
 	printf '%s' "$token"
 }
@@ -56,13 +58,22 @@ _login() {
 # Prints the raw JSON response on stdout; returns 1 on failure.
 _get_decision() {
 	local servername="$1" server="$2" serverport="$3" predict="$4" horizon="$5"
-	local token username password url http_code tmpfile
+	local token username password url http_code tmpfile uci_token_key
 
-	token=$(uci -q get "openmptcprouter.${servername}.token" 2>/dev/null)
-	username=$(uci -q get "openmptcprouter.${servername}.username" 2>/dev/null)
-	password=$(uci -q get "openmptcprouter.${servername}.password" 2>/dev/null)
+	# Prefer global credentials from omr-metrics config if username is set there.
+	username=$(uci -q get "omr-metrics.settings.username" 2>/dev/null)
+	if [ -n "$username" ]; then
+		token=$(uci -q get "omr-metrics.settings.token" 2>/dev/null)
+		password=$(uci -q get "omr-metrics.settings.password" 2>/dev/null)
+		uci_token_key="omr-metrics.settings.token"
+	else
+		token=$(uci -q get "openmptcprouter.${servername}.token" 2>/dev/null)
+		username=$(uci -q get "openmptcprouter.${servername}.username" 2>/dev/null)
+		password=$(uci -q get "openmptcprouter.${servername}.password" 2>/dev/null)
+		uci_token_key="openmptcprouter.${servername}.token"
+	fi
 
-	[ -z "$token" ] && token=$(_login "$servername" "$server" "$serverport" "$username" "$password")
+	[ -z "$token" ] && token=$(_login "$uci_token_key" "$server" "$serverport" "$username" "$password")
 	[ -z "$token" ] && return 1
 
 	if _is_ip6 "$server"; then
@@ -80,7 +91,7 @@ _get_decision() {
 		"$url" 2>/dev/null)
 
 	if [ "$http_code" = "401" ]; then
-		token=$(_login "$servername" "$server" "$serverport" "$username" "$password")
+		token=$(_login "$uci_token_key" "$server" "$serverport" "$username" "$password")
 		[ -n "$token" ] && http_code=$(curl --max-time 10 -s -k \
 			-o "$tmpfile" -w "%{http_code}" \
 			-H "accept: application/json" \
@@ -101,10 +112,14 @@ _get_decision() {
 _fetch_decision_weights() {
 	_is_weight_scheduler || return 1
 
-	local server_names
+	local custom_server custom_serverport server_names
+	custom_server=$(uci -q get "omr-metrics.settings.server" 2>/dev/null)
+	custom_serverport=$(uci -q get "omr-metrics.settings.serverport" 2>/dev/null)
+	[ -z "$custom_serverport" ] && custom_serverport="65500"
+
 	server_names=$(uci -q show openmptcprouter 2>/dev/null | \
 		sed -n 's/^openmptcprouter\.\([^.=][^.=]*\)=server$/\1/p')
-	[ -z "$server_names" ] && return 1
+	[ -z "$custom_server" ] && [ -z "$server_names" ] && return 1
 
 	local iface_list
 	iface_list=$(uci show network 2>/dev/null \
@@ -117,6 +132,34 @@ _fetch_decision_weights() {
 	[ "${_v:-0}" = "1" ] && _predict="true" || _predict="false"
 	_horizon=$(uci -q get omr-metrics.settings.decision_horizon 2>/dev/null)
 	[ -z "$_horizon" ] && _horizon="300"
+
+	# If a custom omr-metrics server is configured, use it exclusively.
+	if [ -n "$custom_server" ]; then
+		local response
+		response=$(_get_decision "omr_metrics_custom" "$custom_server" "$custom_serverport" "$_predict" "$_horizon") || return 1
+		local _changed=0 _iface _weight _cur
+		for _iface in $iface_list; do
+			_weight=$(jsonfilter -s "$response" -e "@['${_iface}']" 2>/dev/null)
+			[ -z "$_weight" ] && continue
+			case "$_weight" in
+				''|*[!0-9]*) continue ;;
+			esac
+			[ "$_weight" -lt 1 ] && continue
+
+			_cur=$(uci -q get "network.${_iface}.multipath_weight" 2>/dev/null)
+			if [ "$_cur" != "$_weight" ]; then
+				uci -q set "network.${_iface}.multipath_weight=$_weight"
+				_changed=1
+			fi
+			_cur=$(uci -q get "network.${_iface}.weight" 2>/dev/null)
+			if [ "$_cur" != "$_weight" ]; then
+				uci -q set "network.${_iface}.weight=$_weight"
+				_changed=1
+			fi
+		done
+		[ "$_changed" -eq 1 ] && uci -q commit network 2>/dev/null || true
+		return 0
+	fi
 
 	for servername in $server_names; do
 		local disabled serverport server_ips
