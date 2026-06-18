@@ -198,7 +198,7 @@ _write_explicit_path() {
 start_service() {
 	config_load mqvpn
 
-	generate_config || return 1
+	generate_config || return 0
 
 	procd_open_instance
 	procd_set_param command /usr/sbin/mqvpn --config "$CONF"
