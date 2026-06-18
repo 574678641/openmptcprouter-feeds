@@ -112,10 +112,13 @@ _get_decision() {
 _fetch_decision_weights() {
 	_is_weight_scheduler || return 1
 
-	local custom_server custom_serverport server_names
-	custom_server=$(uci -q get "omr-metrics.settings.server" 2>/dev/null)
-	custom_serverport=$(uci -q get "omr-metrics.settings.serverport" 2>/dev/null)
-	[ -z "$custom_serverport" ] && custom_serverport="65500"
+	local custom_server custom_serverport server_names use_custom_server
+	use_custom_server=$(uci -q get "omr-metrics.settings.use_custom_server" 2>/dev/null)
+	if [ "${use_custom_server:-0}" = "1" ]; then
+		custom_server=$(uci -q get "omr-metrics.settings.server" 2>/dev/null)
+		custom_serverport=$(uci -q get "omr-metrics.settings.serverport" 2>/dev/null)
+		[ -z "$custom_serverport" ] && custom_serverport="65500"
+	fi
 
 	server_names=$(uci -q show openmptcprouter 2>/dev/null | \
 		sed -n 's/^openmptcprouter\.\([^.=][^.=]*\)=server$/\1/p')

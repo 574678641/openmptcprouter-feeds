@@ -49,6 +49,36 @@ return view.extend({
 		o.placeholder = '300';
 		o.depends('decision_predict', '1');
 
+		o = s.option(form.Flag, 'use_custom_server', _('Use custom metrics server'),
+			_('Send metrics to a dedicated server instead of the VPS.'));
+		o.default = '0';
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'server', _('Server address'),
+			_('Hostname or IP address of the custom metrics server.'));
+		o.depends('use_custom_server', '1');
+		o.rmempty = true;
+
+		o = s.option(form.Value, 'serverport', _('Server port'));
+		o.datatype = 'port';
+		o.placeholder = '65500';
+		o.depends('use_custom_server', '1');
+		o.rmempty = true;
+
+		o = s.option(form.Value, 'username', _('Username'));
+		o.depends('use_custom_server', '1');
+		o.rmempty = true;
+
+		o = s.option(form.Value, 'password', _('Password'));
+		o.password = true;
+		o.depends('use_custom_server', '1');
+		o.rmempty = true;
+
+		o = s.option(form.Value, 'token', _('Token'),
+			_('Bearer token — filled in automatically after the first successful login.'));
+		o.depends('use_custom_server', '1');
+		o.rmempty = true;
+
 		return m.render();
 	}
 });
