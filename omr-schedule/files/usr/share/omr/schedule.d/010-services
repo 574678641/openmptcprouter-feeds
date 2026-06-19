@@ -253,14 +253,32 @@ if [ "$(uci -q get openmptcprouter.settings.disable_modemmanager)" != "1" ]; the
 fi
 
 restart_omrtracker() {
-	[ -n "$(pgrep -f $1)" ] && return
 	config_get multipath "$1" multipath
 	config_get ifenabled "$1" auto
 	{ [ -z "$multipath" ] || [ "$multipath" = "off" ]; } && return
 	[ "$ifenabled" = "0" ] && return
+	local pids pid_count
+	pids=$(pgrep -f "omr-tracker $1")
+	pid_count=$(printf '%s\n' $pids | sed '/^$/d' | wc -l)
+	[ "$pid_count" -gt 1 ] && {
+		printf '%s\n' $pids | tail -n +2 | while read -r pid; do kill "$pid" 2>/dev/null; done
+		return
+	}
+	[ "$pid_count" -eq 1 ] && return
+	# Atomic lock to prevent concurrent starts from overlapping cron runs
+	local lockdir="/tmp/omr-tracker-lock-${1}"
+	if ! mkdir "$lockdir" 2>/dev/null; then
+		local now mtime
+		now=$(date +%s)
+		mtime=$(stat -c "%Y" "$lockdir" 2>/dev/null || echo 0)
+		[ $((now - mtime)) -lt 60 ] && return
+		rmdir "$lockdir" 2>/dev/null
+		mkdir "$lockdir" 2>/dev/null || return
+	fi
 	/etc/init.d/omr-tracker enable
 	/etc/init.d/omr-tracker start_interface "$1"
 	sleep 10
+	rmdir "$lockdir" 2>/dev/null
 }
 
 set_lan_ips() {
@@ -288,6 +306,10 @@ set_lan_ips() {
 }
 config_load network
 config_foreach restart_omrtracker interface
+# Kill any duplicate omr-tracker-server instances
+_srv_pids=$(pgrep -f "omr-tracker-server")
+_srv_count=$(printf '%s\n' $_srv_pids | sed '/^$/d' | wc -l)
+[ "$_srv_count" -gt 1 ] && printf '%s\n' $_srv_pids | tail -n +2 | while read -r pid; do kill "$pid" 2>/dev/null; done
 [ "$(uci -q get openmptcprouter.settings.restrict_to_lan)" = "1" ] && config_foreach set_lan_ips interface
 [ "$(uci -q get openmptcprouter.settings.restrict_to_lan)" = "0" ] && ([ -n "$(uci -q get shadowsocks-libev.ss_rules.ifnames)" ] || [ -n "$(uci -q get shadowsocks-rust.ss_rules.ifnames)" ]) && {
 	uci -q batch <<-EOF
