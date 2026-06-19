@@ -436,9 +436,9 @@ _set_server_all_routes_common() {
 
 			if [ -n "$current_routes" ]; then
 				local existing_gws
-				existing_gws=$($ip_cmd r show "$serverip" metric 1 2>/dev/null | grep -oE 'via [^ ]+' | sort | tr '\n' ' ')
+				existing_gws=$($ip_cmd r show "$serverip" metric 1 2>/dev/null | grep -oE 'via [^ ]+ dev [^ ]+ weight [0-9]+' | sort | tr '\n' ' ')
 				local expected_gws
-				expected_gws=$(echo "$current_routes" | grep -oE 'via [^ ]+' | sort | tr '\n' ' ')
+				expected_gws=$(echo "$current_routes" | grep -oE 'via [^ ]+ dev [^ ]+ weight [0-9]+' | sort | tr '\n' ' ')
 				if [ "$existing_gws" != "$expected_gws" ]; then
 					[ "$debug" = "true" ] && _log "Set server $server ($serverip) default route $serverip $current_routes"
 					$ip_cmd route replace "$serverip" scope global metric 1 $current_routes >/dev/null 2>&1
@@ -448,9 +448,9 @@ _set_server_all_routes_common() {
 
 			if [ -n "$current_backup" ]; then
 				local existing_backup_gws
-				existing_backup_gws=$($ip_cmd r show "$serverip" metric 999 2>/dev/null | grep -oE 'via [^ ]+' | sort | tr '\n' ' ')
+				existing_backup_gws=$($ip_cmd r show "$serverip" metric 999 2>/dev/null | grep -oE 'via [^ ]+ dev [^ ]+ weight [0-9]+' | sort | tr '\n' ' ')
 				local expected_backup_gws
-				expected_backup_gws=$(echo "$current_backup" | grep -oE 'via [^ ]+' | sort | tr '\n' ' ')
+				expected_backup_gws=$(echo "$current_backup" | grep -oE 'via [^ ]+ dev [^ ]+ weight [0-9]+' | sort | tr '\n' ' ')
 				if [ "$existing_backup_gws" != "$expected_backup_gws" ]; then
 					[ "$debug" = "true" ] && _log "Set server $server ($serverip) backup default route $serverip $current_backup nbintfb $current_nbintfb $OMR_TRACKER_DEVICE"
 					$ip_cmd route replace "$serverip" scope global metric 999 $current_backup >/dev/null 2>&1
