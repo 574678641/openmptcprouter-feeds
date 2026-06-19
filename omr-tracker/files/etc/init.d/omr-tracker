@@ -452,6 +452,7 @@ _gre_tunnel() {
 
 start_interface() {
 	[ -z "$1" ] && return
+	[ -n "$(pgrep -f "omr-tracker $1")" ] && return
 	config_load network
 	_launch_tracker $1
 }
