@@ -2286,7 +2286,13 @@ start_service() {
 
 	setup_transparent_proxy
 	gracefully_restart_dnsmasq
-	rules_up
+	local wait_proxy
+	wait_proxy=$(uci -q get v2ray.main_transparent_proxy.wait_proxy 2>/dev/null)
+	if [ "${wait_proxy:-1}" = "1" ]; then
+		rules_down
+	else
+		rules_up
+	fi
 
 	unset OUTBOUND_SERVERS_V4 \
 		OUTBOUND_SERVERS_V6 \
