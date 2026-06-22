@@ -375,9 +375,9 @@ return view.extend({
 		s.anonymous = false;
 		s.addbtntitle = _('Add a new server');
 
-		o = s.option(form.DynamicList, 'ip', _('Server IP'));
+		o = s.option(form.DynamicList, 'ip', _('Server IP or hostname'));
 		o.rmempty = false;
-		o.datatype = 'ipaddr';
+		o.datatype = 'host';
 		o.description = _('Server IP will be set for proxy and VPN');
 		o.write = function(sid, val) {
 			var ips = uniqueValues(val);
