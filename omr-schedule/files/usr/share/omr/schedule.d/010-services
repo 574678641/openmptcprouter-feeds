@@ -48,7 +48,7 @@ if [ -n "$(uci show openmptcprouter | awk -F= '/password/ { gsub("\047","",$2);p
 		/etc/init.d/mlvpn restart >/dev/null 2>&1
 		sleep 5
 	fi
-	if [ "$(pgrep mqvpn)" = "" ] && [ "$(uci -q get mqvpn.settings.enable)" = "1" ] && [ -f /etc/init.d/mqvpn ] && [ "$(uci -q get mlvpn.auth.key)" != "" ]; then
+	if [ "$(pgrep mqvpn)" = "" ] && [ "$(uci -q get mqvpn.settings.enable)" = "1" ] && [ -f /etc/init.d/mqvpn ] && [ "$(uci -q get mqvpn.auth.key)" != "" ]; then
 		_log "Can't find MQVPN, restart it..."
 		/etc/init.d/mqvpn restart >/dev/null 2>&1
 		sleep 5
