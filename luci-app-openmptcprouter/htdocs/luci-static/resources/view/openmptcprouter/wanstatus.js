@@ -220,7 +220,7 @@ return view.extend({
 
 		if (!omr.hostname && !omr.local_addr && !d.wans) return;
 
-		var wans = d.wans || [];
+		var wans = (d.wans || []).filter(function(w) { return w.multipath && w.multipath !== 'off'; });
 		var tunnels = d.tunnels || [];
 		var anonymize = this.getCookie('anonymize') === 'true';
 
