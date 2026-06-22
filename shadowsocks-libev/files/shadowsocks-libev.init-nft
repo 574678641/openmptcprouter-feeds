@@ -331,7 +331,9 @@ start_service() {
 		config_load openmptcprouter
 		config_foreach ss_omr_servers server
 	fi
-	ss_rules
+	local wait_proxy
+	wait_proxy=$(uci -q get shadowsocks-libev.ss_rules.wait_proxy 2>/dev/null)
+	[ "${wait_proxy:-1}" = "0" ] && ss_rules
 }
 
 stop_service() {
@@ -450,7 +452,8 @@ validate_ss_rules_section() {
 		'local_default:or("bypass", "forward", "checkdst"):bypass' \
 		'nft_tcp_extra:string' \
 		'nft_udp_extra:string' \
-		'ifnames:maxlength(15)'
+		'ifnames:maxlength(15)' \
+		'wait_proxy:bool:1'
 }
 
 validate_ss_server_section() {
