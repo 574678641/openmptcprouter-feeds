@@ -19,6 +19,37 @@ SETROUTE=false
 
 . "${OMR_LIB_DIR:-/usr/share/omr/lib}/common-post-tracking.sh"
 
+# Prevent overlapping 003-up runs for the same interface.
+lock_base_dir="/var/run/omr-tracker"
+lock_iface="$(echo "${OMR_TRACKER_INTERFACE:-global}" | tr -c 'A-Za-z0-9_.-' '_')"
+lock_dir="${lock_base_dir}/003-up.${lock_iface}.lock"
+
+mkdir -p "$lock_base_dir" >/dev/null 2>&1
+
+if mkdir "$lock_dir" 2>/dev/null; then
+	printf '%s\n' "$$" >"$lock_dir/pid"
+else
+	lock_pid=""
+	[ -f "$lock_dir/pid" ] && lock_pid="$(cat "$lock_dir/pid" 2>/dev/null)"
+	if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+		rm -rf "$lock_dir" >/dev/null 2>&1
+		if mkdir "$lock_dir" 2>/dev/null; then
+			printf '%s\n' "$$" >"$lock_dir/pid"
+		else
+			_log "Skip overlapping 003-up run on ${OMR_TRACKER_INTERFACE:-global}"
+			exit 0
+		fi
+	else
+		_log "Skip overlapping 003-up run on ${OMR_TRACKER_INTERFACE:-global}"
+		exit 0
+	fi
+fi
+
+cleanup_003_up_lock() {
+	rm -rf "$lock_dir" >/dev/null 2>&1
+}
+trap cleanup_003_up_lock EXIT INT TERM
+
 
 #if [ -n "$RANDOM" ]; then
 #	sleep `expr $RANDOM % 10`
