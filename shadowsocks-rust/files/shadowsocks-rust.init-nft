@@ -307,7 +307,9 @@ start_service() {
 		config_load openmptcprouter
 		config_foreach ss_omr_servers server
 	fi
-	ss_rules
+	local wait_proxy
+	wait_proxy=$(uci -q get shadowsocks-rust.ss_rules.wait_proxy 2>/dev/null)
+	[ "${wait_proxy:-1}" = "0" ] && ss_rules
 }
 
 stop_service() {
@@ -429,7 +431,8 @@ validate_ss_rules_section() {
 		'nft_udp_extra:string' \
 		'ifnames:maxlength(15)' \
 		'tun_mode:string' \
-		'tproxy:bool:0'
+		'tproxy:bool:0' \
+		'wait_proxy:bool:1'
 }
 
 validate_ss_server_section() {
