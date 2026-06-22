@@ -234,7 +234,7 @@ return view.extend({
 		var routerDetails = '';
 		if (omr.version) routerDetails += _('Version') + ' ' + this.esc(omr.version) + '<br />';
 		if (omr.loadavg) routerDetails += _('Load:') + ' ' + this.esc(omr.loadavg) + '<br />';
-		if (omr.core_temp) routerDetails += _('CPU temp:') + ' ' + this.esc(omr.core_temp) + '°C<br />';
+		if (omr.core_temp) routerDetails += _('CPU temp:') + ' ' + this.esc(String(Math.round(parseInt(omr.core_temp) / 1000))) + '°C<br />';
 		if (omr.uptime) routerDetails += _('Uptime:') + ' ' + this.esc(String.format('%t', omr.uptime)) + '<br />';
 		if (omr.proxy) routerDetails += _('Proxy:') + ' ' + this.esc(omr.proxy) + '<br />';
 		if (omr.vpn) routerDetails += _('VPN:') + ' ' + this.esc(omr.vpn) + '<br />';
