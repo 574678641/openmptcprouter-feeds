@@ -1,8 +1,8 @@
 #!/bin/sh /etc/rc.common
-# Copyright (C) 2018-2025 Ycarus (Yannick Chabanois) <ycarus@zugaina.org>
+# Copyright (C) 2018-2026 Ycarus (Yannick Chabanois) <ycarus@zugaina.org>
 # Released under GPL 3. See LICENSE for the full terms.
 
-START=99
+START=85
 
 USE_PROCD=1
 
@@ -28,7 +28,7 @@ fi
 
 
 _parse_result() {
-	result=$("echo $1 | jsonfilter -q -e '@.result'")
+	result=$(echo "$1" | jsonfilter -q -e '@.result')
 	echo $result
 }
 
@@ -208,14 +208,14 @@ _set_softethervpn_vps() {
 	#current_port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
 	current_cipher="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.cipher')"
 	current_password="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.password')"
-	if [ "$current_key" != "$key" ]; then
+	if [ "$current_password" != "$password" ]; then
 		uci -q set openmptcprouter.${servername}.get_config="1"
 	fi
 	#if [ "$current_port" != "$port" ] || [ "$current_cipher" != "$cipher" ]; then
 	if [ "$current_cipher" != "$cipher" ]; then
 		local settings
 		#settings='{"port": '$port', "cipher": "'$cipher'"}'
-		settings='{"cipher": "'$cipher'", "password": "'$key'"}'
+		settings='{"cipher": "'$cipher'", "password": "'$password'"}'
 		echo $(_set_json "softethervpn" "$settings")
 	else
 		echo 1
@@ -416,6 +416,8 @@ _set_xray_server_vps() {
 	userid=$(uci -q get xray.omrout.s_vless_user_id)
 	protocol=$(uci -q get xray.omrout.protocol)
 	ss_method=$(uci -q get xray.omrout.s_shadowsocks_method)
+	transport=$(uci -q get xray.omrout.ss_network)
+	[ -z "$transport" ] && transport="tcp"
 	if [ "$protocol" = "vless-reality" ] && [ "$enabled" = "1" ]; then
 		vless_reality='true'
 	else
@@ -427,10 +429,11 @@ _set_xray_server_vps() {
 	current_userid="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
 	current_vlessreality="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.vless_reality')"
 	current_method="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.ss_method')"
+	current_transport="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.ss_network')"
 
-	if [ "$current_userid" != "$userid" ] || [ "$current_vlessreality" != "$vless_reality" ] || [ "$current_method" != "$ss_method" ]; then
+	if [ "$current_userid" != "$userid" ] || [ "$current_vlessreality" != "$vless_reality" ] || [ "$current_method" != "$ss_method" ] || [ "$current_transport" != "$transport" ]; then
 		local settings
-		settings='{"userid": "'$userid'","vless_reality": '$vless_reality',"ss_method": "'$ss_method'"}'
+		settings='{"userid": "'$userid'","vless_reality": '$vless_reality',"ss_method": "'$ss_method'","transport": "'$transport'"}'
 		echo $(_set_json "xray" "$settings")
 	fi
 }
@@ -650,8 +653,22 @@ _get_vps_config() {
 		fi
 	fi
 
+	mqvpn_port_tmp="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	[ -z "$mqvpn_port_tmp" ] && mqvpn_port_tmp="65443"
+	if [ -n "$(uci -q get mqvpn.server)" ] && { [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port_tmp" ]; } && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port_tmp"
+			commit mqvpn
+		EOF
+		if [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
+			logger -t "OMR-VPS" "Restart MQVPN..."
+			/etc/init.d/mqvpn restart
+		fi
+	fi
+
 	port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
-	if [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ([ "$(uci -q get softethervpn.openmptcprouter.host)" != "127.0.0.1" ] && [ "$(uci -q get softethvpn.openmptcprouter.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]) || [ "$(uci -q get softethervpn.openmptcprouter.port)" != "$port" ]; then
+	if [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ([ "$(uci -q get softethervpn.openmptcprouter.host)" != "127.0.0.1" ] && [ "$(uci -q get softethervpn.openmptcprouter.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]) || [ "$(uci -q get softethervpn.openmptcprouter.port)" != "$port" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set softethervpn.openmptcprouter.port=$port
 			set softethervpn.openmptcprouter.host="$vpsip"
@@ -722,7 +739,7 @@ _get_gre_tunnel() {
 			peeraddr="$(echo $tunnel | jsonfilter -q -e '@.remote_ip')"
 			ipaddr="$(echo $tunnel | jsonfilter -q -e '@.local_ip')"
 			publicaddr="$(echo $tunnel | jsonfilter -q -e '@.public_ip')"
-			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omr_out.protocol)" ])); then
+			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omrout.protocol)" ])); then
 				uci -q batch <<-EOF >/dev/null
 					set network.oip${i}gre=interface
 					set network.oip${i}gre.label="GRE tunnel for $publicaddr"
@@ -869,7 +886,8 @@ _get_gre_tunnel() {
 							set xray.oip${i}_redir.listen='0.0.0.0'
 							set xray.oip${i}_redir.port='180${i}'
 							set xray.oip${i}_redir.protocol='dokodemo-door'
-							set xray.oip${i}_redir.s_dokodemo_door_network='tcp' 'udp'
+							set xray.oip${i}_redir.s_dokodemo_door_network='tcp'
+							add_list xray.oip${i}_redir.s_dokodemo_door_network='udp'
 							set xray.oip${i}_redir.ss_sockopt_tproxy='redirect'
 							set xray.oip${i}_redir.ss_sockopt_tcp_fast_open='1'
 							set xray.oip${i}_redir.ss_sockopt_mptcp='1'
@@ -878,7 +896,7 @@ _get_gre_tunnel() {
 							set xray.oip${i}_routing.tag="oip${i}_routing"
 							set xray.oip${i}_routing.type='field'
 							set xray.oip${i}_routing.inbound_tag="oip${i}_redir"
-							set xray.oip${i}_routing.outbound_tag="oip${i}_tunnel"
+							set xray.oip${i}_routing.outbound_tag="oip${i}server_tunnel"
 							add_list xray.main_routing.rules="oip${i}_routing"
 							set xray.oip${i}_transparent_proxy=transparent_proxy
 							set xray.oip${i}_transparent_proxy.proxy_mode='default'
@@ -1023,6 +1041,10 @@ _set_mptcp_vps() {
 	syn_retries_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retries')"
 	congestion_control_current="$(echo "$vps_config" | jsonfilter -q -e '@.network.congestion_control')"
 	mptcp_version_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.version')"
+	close_timeout_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.close_timeout')"
+	pm_type_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.pm_type')"
+	stale_loss_cnt_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.stale_loss_cnt')"
+	syn_retrans_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retrans_before_tcp_fallback')"
 	mptcp_enabled="$(uci -q get network.globals.multipath)"
 	if [ "$mptcp_enabled" = "disable" ]; then
 		mptcp_enabled="0"
@@ -1035,11 +1057,15 @@ _set_mptcp_vps() {
 	syn_retries="$(uci -q get network.globals.mptcp_syn_retries)"
 	congestion="$(uci -q get network.globals.congestion)"
 	mptcp_version="$(uci -q get network.globals.mptcp_version)"
+	close_timeout="$(uci -q get network.globals.mptcp_close_timeout)"
+	pm_type="$(uci -q get network.globals.mptcp_pm_type)"
+	stale_loss_cnt="$(uci -q get network.globals.mptcp_stale_loss_cnt)"
+	syn_retrans_before_tcp_fallback="$(uci -q get network.globals.mptcp_syn_retrans_before_tcp_fallback)"
 	[ -z "$mptcp_version" ] && mptcp_version="0"
 	[ ! -f /proc/sys/net/mptcp/mptcp_enabled ] && mptcp_version="1"
 	[ -z "$congestion" ] && congestion="bbr"
-	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || ([ "$path_manager_current" != "" ] && [ "$path_manager_current" != "$path_manager" ]) || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ]; then
-		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'"}'
+	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || ([ "$path_manager_current" != "" ] && [ "$path_manager_current" != "kernel" ] && [ "$path_manager_current" != "$path_manager" ]) || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ] || ([ -n "$close_timeout_current" ] && [ "$close_timeout_current" != "0" ] && [ "$close_timeout_current" != "$close_timeout" ]) || ([ -n "$pm_type_current" ] && [ "$pm_type_current" != "0" ] && [ "$pm_type_current" != "$pm_type" ]) || ([ -n "$stale_loss_cnt_current" ] && [ "$stale_loss_cnt_current" != "0" ] && [ "$stale_loss_cnt_current" != "$stale_loss_cnt" ]) || ([ -n "$syn_retrans_current" ] && [ "$syn_retrans_current" != "0" ] && [ "$syn_retrans_current" != "$syn_retrans_before_tcp_fallback" ]); then
+		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'","close_timeout": "'$close_timeout'","pm_type": "'$pm_type'","stale_loss_cnt": "'$stale_loss_cnt'","syn_retrans_before_tcp_fallback": "'$syn_retrans_before_tcp_fallback'"}'
 		echo $(_set_json "mptcp" "$settings")
 	else
 		echo 1
@@ -1125,14 +1151,14 @@ _set_bypass_ips() {
 	local settings
 	[ -z "$servername" ] && servername=$1
 	bypassipv4s=$(ipset -q -o save list omr_dst_bypass_srv_vpn1_4 2>/dev/null | awk '/add/ NF {print "\""$3"\""}' | tr '\n' ',' | sed 's/,$//')
-	[ -z "$bypassipvs4" ] && {
+	[ -z "$bypassipv4s" ] && {
 		bypassipv4slst=$(nft -j list set inet fw4 "omr_dst_bypass_srv_vpn1_4"  2>/dev/null)
 		[ -n "$bypassipv4slst" ] && bypassipv4s=$(echo "$bypassipv4slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
 	}
 	bypassipv6s=$(ipset -q -o save list omr6_dst_bypass_srv_vpn1_6  2>/dev/null | awk '/add/ NF {print "\""$3"\""}' | tr '\n' ',' | sed 's/,$//')
-	[ -z "$bypassipvs6" ] && {
+	[ -z "$bypassipv6s" ] && {
 		bypassipv6slst=$(nft -j list set inet fw4 "omr_dst_bypass_srv_vpn1_6"  2>/dev/null)
-		[ -n "$bypassipv6slst" ] && bypassipv6s=$(echo "$bypassipv4slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
+		[ -n "$bypassipv6slst" ] && bypassipv6s=$(echo "$bypassipv6slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
 	}
 	# "
 	if [ "$bypassipv4s" != "" ] || [ "$bypassipv6s" != "" ]; then
@@ -1650,7 +1676,7 @@ _set_openvpn_server() {
 
 
 _set_config_from_vps() {
-	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect mlvpn_key openvpn_key dsvpn_key
+	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect mlvpn_key openvpn_key dsvpn_key mqvpn_key mqvpn_port mqvpn_user mqvpn_cc
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
 
@@ -1675,10 +1701,15 @@ _set_config_from_vps() {
 	fi
 
 	ula="$(echo "$vps_config" | jsonfilter -q -e '@.ip6in4.ula')"
-	if [ -n "$ula" ] && [[ "$ula" != *" "* ]]; then
-		uci -q batch <<-EOF >/dev/null
-		set network.globals.ula_prefix=$ula
-		EOF
+	if [ -n "$ula" ]; then
+		case "$ula" in
+			*" "*) ;;
+			*)
+				uci -q batch <<-EOF >/dev/null
+				set network.globals.ula_prefix=$ula
+				EOF
+			;;
+		esac
 	fi
 
 	# Set current VPN
@@ -1905,9 +1936,10 @@ _set_config_from_vps() {
 	xray_key="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
 	xray_sskey="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.sskey')"
 	xray_vless_reality_key="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.vless_reality_key')"
+	xray_transport="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.transport')"
 	#v2ray_port="$(echo "$vps_config" | jsonfilter -q -e '@.v2ray.config.port')"
 	xray_port="65248"
-	if [ -n "$(uci -q get xray.omr)" ] && ( ([ -n "$xray_key" ] && [ "$xray_key" != "$(uci -q get xray.omrout.s_vmess_user_id)" ]) || ([ -n "$xray_port" ] && [ "$xray_port" != "$(uci -q get xray.omrout.s_vmess.port)" ]) ); then
+	if [ -n "$(uci -q get xray.omr)" ] && ( ([ -n "$xray_key" ] && [ "$xray_key" != "$(uci -q get xray.omrout.s_vmess_user_id)" ]) || ([ -n "$xray_port" ] && [ "$xray_port" != "$(uci -q get xray.omrout.s_vmess.port)" ]) || ([ -n "$xray_transport" ] && [ "$xray_transport" != "$(uci -q get xray.omrout.ss_network)" ])); then
 		uci -q batch <<-EOF >/dev/null
 			set xray.omrout.s_shadowsocks_port="$((xray_port+4))"
 			set xray.omrout.s_shadowsocks_password="$xray_sskey"
@@ -1921,6 +1953,7 @@ _set_config_from_vps() {
 			set xray.omrout.s_vless_port="$xray_port"
 			set xray.omrout.s_vless_reality_user_id="$xray_key"
 			set xray.omrout.s_vless_reality_public_key="$xray_vless_reality_key"
+			set xray.omrout.ss_network="$xray_transport"
 		EOF
 		#uci -q set xray.omrout.s_shadowsocks_password=$xray_sskey
 		if [ "$(uci -q get xray.omrout.s_vmess_address)" != "127.0.0.1" ]; then
@@ -1946,7 +1979,7 @@ _set_config_from_vps() {
 	# Glorytun settings
 	glorytun_key="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.key')"
 	glorytun_port="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.port')"
-	if [ -n "$(uci -q get glorytun.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun.vpn.key)" ]) || ([ -n "$glorytun_port" ] || [ "$glorytun_port" != "$(uci -q get glorytun.vpn.port)" ]) ); then
+	if [ -n "$(uci -q get glorytun.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun.vpn.key)" ]) || ([ -n "$glorytun_port" ] && [ "$glorytun_port" != "$(uci -q get glorytun.vpn.port)" ]) ); then
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		glorytun_state=0
 		if [ "$vpn" = "glorytun_tcp" ]; then
@@ -1954,7 +1987,7 @@ _set_config_from_vps() {
 		fi
 		[ -z "$glorytun_port" ] && glorytun_port="65001"
 		glorytun_chacha="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.chacha')"
-		[ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ] && glorytun_chacha=1
+		{ [ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ]; } && glorytun_chacha=1
 		[ "$glorytun_chacha" = "false" ] && glorytun_chacha=0
 		uci -q batch <<-EOF >/dev/null
 			set glorytun.vpn.port=$glorytun_port
@@ -1971,7 +2004,7 @@ _set_config_from_vps() {
 			/etc/init.d/glorytun restart >/dev/null 2>&1
 		fi
 	fi
-	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun-udp.vpn.key)" ]) || ([ -n "$glorytun_port" ] || [ "$glorytun_port" != "$(uci -q get glorytun-udp.vpn.port)" ]) ); then
+	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun-udp.vpn.key)" ]) || ([ -n "$glorytun_port" ] && [ "$glorytun_port" != "$(uci -q get glorytun-udp.vpn.port)" ]) ); then
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		glorytun_state=0
 		if [ "$vpn" = "glorytun_udp" ]; then
@@ -1979,7 +2012,7 @@ _set_config_from_vps() {
 		fi
 		[ -z "$glorytun_port" ] && glorytun_port="65001"
 		glorytun_chacha="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.chacha')"
-		[ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ] && glorytun_chacha=1
+		{ [ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ]; } && glorytun_chacha=1
 		[ "$glorytun_chacha" = "false" ] && glorytun_chacha=0
 		uci -q batch <<-EOF >/dev/null
 			set glorytun-udp.vpn.port=$glorytun_port
@@ -2051,7 +2084,7 @@ _set_config_from_vps() {
 	[ -n "$openvpn_client_ca" ] && {
 		echo $openvpn_client_ca | base64 -d > /etc/luci-uploads/ca.crt
 	}
-	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_crt" ] && [ -n "$openvpn_client_ca" ] && {
+	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_ca" ] && {
 		openvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.openvpn.port')"
 		[ -z "$openvpn_port" ] && openvpn_port="65001"
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
@@ -2074,7 +2107,7 @@ _set_config_from_vps() {
 			config_foreach _set_openvpn_server openvpn "enabled" "$openvpn_state"
 		fi
 		config_foreach _set_openvpn_server openvpn "key" "/etc/luci-uploads/client.key"
-		config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
+		[ -n "$openvpn_client_crt" ] && config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
 		config_foreach _set_openvpn_server openvpn "ca" "/etc/luci-uploads/ca.crt"
 		config_foreach _set_openvpn_server openvpn "tls_client" "1"
 		config_foreach _set_openvpn_server openvpn "client" "1"
@@ -2131,6 +2164,7 @@ _set_config_from_vps() {
 	dsvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.port')"
 	if [ -f /etc/init.d/dsvpn ] && [ -n "$(uci -q get dsvpn.vpn)" ] && ( ([ -n "$dsvpn_key" ] && [ "$dsvpn_key" != "$(uci -q get dsvpn.vpn.key)" ]) || ([ -n "$dsvpn_port" ] && [ "$dsvpn_port" != "$(uci -q get dsvpn.vpn.port)" ]) ); then
 		dsvpn_state=0
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		if [ "$vpn" = "dsvpn" ]; then
 			dsvpn_state=1
 		fi
@@ -2150,13 +2184,48 @@ _set_config_from_vps() {
 		fi
 	fi
 
+	# MQVPN settings
+	mqvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.key')"
+	mqvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	[ -z "$mqvpn_port" ] && mqvpn_port="65443"
+	mqvpn_cc="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.cc')"
+	mqvpn_user="$(uci -q get openmptcprouter.${servername}.username)"
+	if [ -f /etc/init.d/mqvpn ] && [ -n "$(uci -q get mqvpn.auth)" ] && [ -n "$mqvpn_key" ] && \
+	   ( [ "$mqvpn_key" != "$(uci -q get mqvpn.auth.key)" ] || \
+	     [ "$mqvpn_user" != "$(uci -q get mqvpn.auth.user)" ] || \
+	     [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || \
+	     [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port" ] || \
+	     ( [ -n "$mqvpn_cc" ] && [ "$mqvpn_cc" != "$(uci -q get mqvpn.multipath.cc)" ] ) || \
+	     ( [ "$(uci -q get openmptcprouter.settings.vpn)" = "mqvpn" ] && [ "$(uci -q get mqvpn.settings.enable)" != "1" ] ) ); then
+		mqvpn_state=0
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
+		if [ "$vpn" = "mqvpn" ]; then
+			mqvpn_state=1
+		fi
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.auth.key=$mqvpn_key
+			set mqvpn.auth.user=$mqvpn_user
+			set mqvpn.settings.enable=$mqvpn_state
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port"
+			$([ -n "$mqvpn_cc" ] && echo "set mqvpn.multipath.cc=$mqvpn_cc")
+			commit mqvpn
+		EOF
+		if [ -n "$(uci -q changes mqvpn)" ]; then
+			uci -q commit mqvpn
+			logger -t "OMR-VPS" "MQVPN restart..."
+			/etc/init.d/mqvpn restart
+		fi
+	fi
+
 	# SoftEtherVPN settings
 	softethervpn_password="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.password')"
 	softethervpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
-	if [ -f /etc/init.d/softethervpnclient ] && [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ( ([ -n "$softethervpn_password" ] && [ "$softethervpn_password" != "$(uci -q get softethervpn.openmptcprouter.password)" ]) || ([ -n "$softhervpn_port" ] && [ "$softethervpn_port" != "$(uci -q get softethervpn.openmptcprouter.port)" ]) ); then
+	if [ -f /etc/init.d/softethervpnclient ] && [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ( ([ -n "$softethervpn_password" ] && [ "$softethervpn_password" != "$(uci -q get softethervpn.openmptcprouter.password)" ]) || ([ -n "$softethervpn_port" ] && [ "$softethervpn_port" != "$(uci -q get softethervpn.openmptcprouter.port)" ]) ); then
 		softethervpn_state=0
-		if [ "$vpn" = "softhervpn" ]; then
-			sofethersvpn_state=1
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
+		if [ "$vpn" = "softethervpn" ]; then
+			softethervpn_state=1
 		fi
 		uci -q batch <<-EOF >/dev/null
 			set softethervpn.openmptcprouter.password=$softethervpn_password
@@ -2206,13 +2275,26 @@ _set_config_from_vps() {
 		set network.globals.congestion=$congestion
 		commit network
 	EOF
-	if [ "$mptcp_path_manager" != "" ] && [ "$mptcp_scheduler" != "" ] && [ "$mptcp_syn_retries" != "" ]; then
+	if [ "$mptcp_scheduler" != "" ] && [ "$mptcp_syn_retries" != "" ]; then
 		uci -q batch <<-EOF >/dev/null
-			set network.globals.mptcp_path_manager=$mptcp_path_manager
 			set network.globals.mptcp_scheduler=$mptcp_scheduler
 			set network.globals.mptcp_syn_retries=$mptcp_syn_retries
 			commit network
 		EOF
+	fi
+	if [ "$mptcp_path_manager" != "" ] && [ "$mptcp_path_manager" != "kernel" ]; then
+		uci -q set network.globals.mptcp_path_manager="$mptcp_path_manager"
+	fi
+	mptcp_close_timeout="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.close_timeout')"
+	mptcp_pm_type="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.pm_type')"
+	mptcp_stale_loss_cnt="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.stale_loss_cnt')"
+	mptcp_syn_retrans_before_tcp_fallback="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retrans_before_tcp_fallback')"
+	[ -n "$mptcp_close_timeout" ] && [ "$mptcp_close_timeout" != "0" ] && uci -q set network.globals.mptcp_close_timeout="$mptcp_close_timeout"
+	[ -n "$mptcp_pm_type" ] && [ "$mptcp_pm_type" != "0" ] && uci -q set network.globals.mptcp_pm_type="$mptcp_pm_type"
+	[ -n "$mptcp_stale_loss_cnt" ] && [ "$mptcp_stale_loss_cnt" != "0" ] && uci -q set network.globals.mptcp_stale_loss_cnt="$mptcp_stale_loss_cnt"
+	[ -n "$mptcp_syn_retrans_before_tcp_fallback" ] && [ "$mptcp_syn_retrans_before_tcp_fallback" != "0" ] && uci -q set network.globals.mptcp_syn_retrans_before_tcp_fallback="$mptcp_syn_retrans_before_tcp_fallback"
+	if [ -n "$(uci -q changes network)" ]; then
+		uci -q commit network
 	fi
 
 	# Check if server get an IPv6, if not disable IPv6 on OMR
@@ -2253,7 +2335,7 @@ _set_config_from_vps() {
 	uci -q batch <<-EOF >/dev/null
 		del iperf.${servername}
 		set iperf.${servername}=server
-		set iperf.${servername}.host=$server
+		set iperf.${servername}.host=$vpsip
 		set iperf.${servername}.ports=65400
 		set iperf.${servername}.ipv4=1
 		set iperf.${servername}.ipv6=0
@@ -2674,7 +2756,7 @@ start_service() {
 
 service_triggers() {
 	#procd_add_reload_trigger openmptcprouter network shadowsocks-libev v2ray glorytun glorytun-udp mlvpn openvpn dsvpn
-	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn
+	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn mqvpn
 	procd_add_config_trigger "config.change" "firewall" /etc/init.d/openmptcprouter-vps set_vps_firewall
 	#procd_add_config_trigger "config.change" "network" /etc/init.d/openmptcprouter-vps set_gre_tunnel
 	#procd_add_reload_trigger openmptcprouter shadowsocks-libev network upnpd

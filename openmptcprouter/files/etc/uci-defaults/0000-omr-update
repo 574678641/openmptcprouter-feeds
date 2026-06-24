@@ -19,4 +19,6 @@ files="$(ls /etc/uci-defaults/)"
 # Do not keep /etc/nftables.d
 rm -f /lib/upgrade/keep.d/firewall4
 
+sed -i 's:cmd="$ipkg_bin":cmd="$ipkg_bin --allow-untrusted":' /usr/libexec/package-manager-call
+
 exit 0

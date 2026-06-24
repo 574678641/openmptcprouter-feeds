@@ -384,6 +384,8 @@ outbound_section_validate() {
 		's_vless_user_alter_id:and(uinteger, max(65535))' \
 		's_vless_user_security:or("auto", "aes-128-gcm", "chacha20-poly1305", "none")' \
 		's_vless_user_encryption:or("auto", "none")' \
+		's_vless_flow:string' \
+		's_vless_decryption:string' \
 		's_vless_user_level:uinteger' \
 		's_vless_reality_address:host' \
 		's_vless_reality_port:port' \
@@ -1241,8 +1243,6 @@ add_inbound_setting() {
 			json_close_array # alpn
 		fi
 
-		json_add_boolean "allowInsecure" "$ss_tls_allow_insecure"
-		json_add_boolean "allowInsecureCiphers" "$ss_tls_allow_insecure_ciphers"
 		json_add_boolean "disableSystemRoot" "$ss_tls_disable_system_root"
 
 		json_add_array "certificates"
@@ -1637,6 +1637,8 @@ add_outbound_setting() {
 			append_server_address "$s_vless_address"
 
 			json_add_int "port" "$s_vless_port"
+			test -n "$ss_vless_decryption" && \
+				json_add_string "decryption" "$ss_vless_decryption"
 
 			json_add_array "users"
 			json_add_object ""
@@ -1648,6 +1650,8 @@ add_outbound_setting() {
 				json_add_string "encryption" "$s_vless_user_encryption"
 			test -n "$s_vless_user_level" && \
 				json_add_int "level" "$s_vless_user_level"
+			test -n "$s_vless_flow" && \
+				json_add_string "flow" "$s_vless_flow"
 			json_close_object
 			json_close_array # users
 
@@ -1735,6 +1739,9 @@ add_outbound_setting() {
 		json_add_string "network" "$ss_network"
 
 	if [ "x$protocol" != "xshadowsocks" ]; then
+		test -n "$ss_decryption" && \
+			json_add_string "decryption" "$ss_decryption"
+
 		test -n "$ss_security" && \
 			json_add_string "security" "$ss_security"
 
@@ -1750,8 +1757,6 @@ add_outbound_setting() {
 				json_close_array
 			fi
 
-			json_add_boolean "allowInsecure" "$ss_tls_allow_insecure"
-			json_add_boolean "allowInsecureCiphers" "$ss_tls_allow_insecure_ciphers"
 			json_add_boolean "disableSystemRoot" "$ss_tls_disable_system_root"
 
 			json_add_array "certificates"
@@ -2335,6 +2340,8 @@ rules_up() {
 			mv -f "$f" "$(echo "$f" | sed 's/.down//g')"
 		done
 		fw4 -q reload
+	elif [ ! -f "$xrrules_nft" ]; then
+		/etc/init.d/xray restart &
 	fi
 }
 
@@ -2372,7 +2379,13 @@ start_service() {
 	config_foreach _setup_firewall transparent_proxy
 	#config_foreach setup_transparent_proxy transparent_proxy
 	gracefully_restart_dnsmasq
-	rules_up
+	local wait_proxy
+	wait_proxy=$(uci -q get xray.main_transparent_proxy.wait_proxy 2>/dev/null)
+	if [ "${wait_proxy:-1}" = "1" ]; then
+		rules_down
+	else
+		rules_up
+	fi
 
 	unset OUTBOUND_SERVERS_V4 \
 		OUTBOUND_SERVERS_V6 \

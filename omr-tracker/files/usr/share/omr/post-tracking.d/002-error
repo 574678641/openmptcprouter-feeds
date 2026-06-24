@@ -10,7 +10,7 @@
 
 interface_up=$(ifstatus "$OMR_TRACKER_INTERFACE" 2>/dev/null | jsonfilter -q -e '@["up"]')
 
-. /usr/share/omr/lib/common-post-tracking.sh
+. "${OMR_LIB_DIR:-/usr/share/omr/lib}/common-post-tracking.sh"
 
 if [ "$OMR_TRACKER_STATUS" = "ERROR" ] && [ "$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.state)" != "down" ]; then
 	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.state='down'
@@ -138,7 +138,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 	multipath_status="off"
 #	[ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && multipath $OMR_TRACKER_DEVICE off >/dev/null 2>&1
 #	[ "$OMR_TRACKER_INTERFACE" = "omr6in4" ] && multipath $OMR_TRACKER_DEVICE off >/dev/null 2>&1
-	if [ -e "/sys/class/net/$OMR_TRACKER_DEVICE" ]; then
+	if [ -e "${OMR_SYS_CLASS_NET_DIR:-/sys/class/net}/$OMR_TRACKER_DEVICE" ]; then
 		case "$(multipath "$OMR_TRACKER_DEVICE" 2>/dev/null)" in
 			*default*)      multipath_status="on"       ;;
 			*backup*)       multipath_status="backup"   ;;
@@ -147,6 +147,13 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 	fi
 
 	if [ "$multipath_status" != "off" ] || { [ -n "$OMR_TRACKER_INTERFACE" ] && [ "$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.multipathvpn)" = "1" ]; }; then
+		disable_multipath_off=""
+		if [ -n "$OMR_TRACKER_INTERFACE" ]; then
+			disable_multipath_off="$(uci -q get omr-tracker.$OMR_TRACKER_INTERFACE.disable_multipath_off)"
+		fi
+		[ -z "$disable_multipath_off" ] && disable_multipath_off="$(uci -q get omr-tracker.defaults.disable_multipath_off)"
+		[ -z "$disable_multipath_off" ] && disable_multipath_off="0"
+
 		if [ "$OMR_TRACKER_STATUS_MSG" = "" ]; then
 			_log "$OMR_TRACKER_INTERFACE ($OMR_TRACKER_DEVICE) switched off (interface up status: $interface_up - Tracker status: $OMR_TRACKER_STATUS)"
 		else
@@ -156,9 +163,9 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.state='down'
 			env -i ACTION="disconnecting" INTERFACE="$OMR_TRACKER_INTERFACE" DEVICE="$OMR_TRACKER_DEVICE" /sbin/hotplug-call iface
 		fi
-		#if [ "$(sysctl -n net.mptcp.mptcp_enabled | tr -d '\n')" = "1" ]; then
-		multipath "$OMR_TRACKER_DEVICE" off > /dev/null 2>&1
-		#fi
+		if [ "$disable_multipath_off" != "1" ]; then
+			multipath "$OMR_TRACKER_DEVICE" off > /dev/null 2>&1
+		fi
 		if [ "$(uci -q get glorytun-udp.vpn.enable)" = "1" ] && [ "$OMR_TRACKER_TYPE" != "glorytun" ]; then
 			if [ -n "$OMR_TRACKER_DEVICE_IP" ]; then
 				glorytun-udp path addr "$OMR_TRACKER_DEVICE_IP" dev tun0 set down > /dev/null 2>&1
@@ -169,8 +176,8 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		fi
 		if [ -n "$OMR_TRACKER_INTERFACE" ] && [ "$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.vpn)" = "1" ] && [ "$(uci -q get openmptcprouter.settings.mptcpovervpn)" = "openvpn" ]; then
 			VPN_BASE_INTF="$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.baseintf)"
-			VPN_BASE_INTF_IP=$(ubus call network.interface.$VPN_BASE_INTF status | jsonfilter -e '@["ipv4-address"][0].address' | tr -d "\n")
 			if [ -n "$VPN_BASE_INTF" ]; then
+				VPN_BASE_INTF_IP=$(ubus call network.interface.$VPN_BASE_INTF status | jsonfilter -e '@["ipv4-address"][0].address' | tr -d "\n")
 				uci -q batch <<-EOF >/dev/null
 					set openvpn.$VPN_BASE_INTF.local="$VPN_BASE_INTF_IP"
 					commit openvpn
@@ -187,7 +194,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		if [ -n "$OMR_TRACKER_INTERFACE" ]; then
 			default_gw=$(ip route get 1.1.1.1 | grep via | awk '{print $3}')
 			default_gw6=$(ip -6 route get 2606:4700:4700::1111 | grep via | awk '{print $3}')
-			if { [ "$default_gw" = "$OMR_TRACKER_DEVICE_GATEWAY" ] || [ "$default_gw" = "" ] || [ "$default_gw6" != "$OMR_TRACKER_DEVICE_GATEWAY6" ]; } && [ "$(uci -q get openmptcprouter.settings.defaultgw)" != "0" ]; then
+			if { [ "$default_gw" = "$OMR_TRACKER_DEVICE_GATEWAY" ] || [ "$default_gw" = "" ] || [ "$default_gw6" = "$OMR_TRACKER_DEVICE_GATEWAY6" ]; } && [ "$(uci -q get openmptcprouter.settings.defaultgw)" != "0" ]; then
 				[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Default gw: $default_gw - Set routes (current: $(ip r) )"
 				config_load network
 				config_foreach set_route interface $OMR_TRACKER_INTERFACE
@@ -205,12 +212,11 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 				config_foreach set_route6 interface $OMR_TRACKER_INTERFACE "no"
 			fi
 		fi
-		if [ "$(uci -q get openmptcprouter.settings.master)" = "balancing" ]; then
-			[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set balancing route (current: $(ip r) )"
-			config_foreach set_server_all_routes server
-			config_foreach set_server_all_routes6 server
-			[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set balancing route done (new: $(ip r) )"
-		fi
+		[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set server routes (current: $(ip r) )"
+		config_load openmptcprouter
+		config_foreach set_server_all_routes server
+		config_foreach set_server_all_routes6 server
+		[ "$(uci -q get openmptcprouter.settings.debug)" = "true" ] && _log "Set server routes done (new: $(ip r) )"
 	fi
 	
 	mail_alert=""
@@ -268,6 +274,10 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			_log "DSVPN down, restart it"
 			/etc/init.d/dsvpn restart >/dev/null 2>&1
 		fi
+		if [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
+			_log "mqvn down, restart it"
+			/etc/init.d/mqvpn restart >/dev/null 2>&1
+		fi
 		if [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
 			_log "MLVPN down, restart it"
 			/etc/init.d/mlvpn restart >/dev/null 2>&1
@@ -280,7 +290,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			_log "Glorytun UDP VPN down, restart it"
 			/etc/init.d/glorytun-udp restart >/dev/null 2>&1
 		fi
-		if [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
+		if [ "$(uci -q get openvpn.omr.enabled)" = "1" ] && [ "$(uci -q get openmptcprouter.settings.vpn)" != "none" ]; then
 			_log "OpenVPN down, restart it"
 			/etc/init.d/openvpn restart omr >/dev/null 2>&1
 		fi

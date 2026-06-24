@@ -65,6 +65,7 @@ _setup_wan_interface() {
 	set network.$1.defaultroute=0
 	set network.$1.delegate=0
 	set network.$1.addlatency=0
+	set network.$1.qdisc=fq
 	delete network.$1.ifname
 	set network.${1}_dev=device
 	set network.${1}_dev.name=$2
@@ -104,13 +105,18 @@ if [ "$(uci -q show network.lan | grep multipath)" != "" ]; then
 fi
 
 lanif="eth0"
-if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ]; then
+if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ] || [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep 'mt2500')" ]; then
 	lanif="eth0"
 elif [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4" ] || [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4-poe" ]; then
 	lanif="wan"
 elif [ "$(grep rockchip /etc/os-release)" != "" ]; then
 	lanif="eth1"
 elif [ "$(grep filogic /etc/os-release)" != "" ]; then
+	if [ -d /sys/class/net/wan ]; then
+		lanif="wan"
+	else
+		lanif="eth1"
+	fi
 	lanif="eth1"
 elif [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep bananapi_bpi-r3)" ]; then
 	lanif="eth0"

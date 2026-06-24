@@ -11,6 +11,8 @@
 [ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && multipath "$OMR_TRACKER_DEVICE" off >/dev/null 2>&1
 [ "$OMR_TRACKER_INTERFACE" = "omr6in4" ] && multipath "$OMR_TRACKER_DEVICE" off >/dev/null 2>&1
 
+. "${OMR_LIB_DIR:-/usr/share/omr/lib}/common-post-tracking.sh"
+
 if [ -n "$OMR_TRACKER_INTERFACE" ] && [ -n "$OMR_TRACKER_DEVICE" ] && [ "$OMR_TRACKER_INTERFACE" != "omrvpn" ] && [ "$OMR_TRACKER_INTERFACE" != "omr6in4" ]; then
 	if [ "$(uci -q get network.$OMR_TRACKER_INTERFACE.disabled)" = "1" ]; then
 		_log "Disable MPTCP & Tracker on the disabled interface $OMR_TRACKER_INTERFACE ($OMR_TRACKER_DEVICE)"
@@ -61,8 +63,12 @@ if [ -n "$(grep z8109ax /etc/board.json)" ] && [ "$(uci -q get network.modem1.pr
 	[ -n "$(uci -q changes network)" ] && uci -q commit network
 fi
 
-# Force unbound DNS resolution on IPv4 is no IPv6 set
-if [ -n "$(uci -q show unbound)" ]; then
+# Force unbound DNS resolution on IPv4 if n IPv6 set
+_unbound_lc=$(uci -q get openmptcprouter.settings.unbound_lc)
+_unbound_now=$(date +%s)
+if [ -n "$(uci -q show unbound)" ] && { [ -z "$_unbound_lc" ] || [ $((_unbound_now - _unbound_lc)) -gt 60 ]; }; then
+	uci -q set openmptcprouter.settings.unbound_lc="$_unbound_now"
+	uci -q commit openmptcprouter
 	if [ -n "$(ip -6 r show scope global)" ]; then
 		uci -q set unbound.ub_main.protocol='mixed'
 	else
