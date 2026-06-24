@@ -167,6 +167,39 @@ ss_redir_ports() {
 	fi
 }
 
+ss_collect_redir_info() {
+	local cfg="$1"
+	local port srv_ip cfgserver disabled srv_disabled password mode
+
+	disabled=$(uci -q get shadowsocks-rust.$cfg.disabled)
+	[ "$disabled" = "1" ] && return
+	cfgserver=$(uci -q get shadowsocks-rust.$cfg.server)
+	srv_disabled=$(uci -q get shadowsocks-rust.${cfgserver}.disabled)
+	[ "$srv_disabled" = "1" ] && return
+	password=$(uci -q get "shadowsocks-rust.${cfgserver}.password" 2>/dev/null)
+	[ -z "$password" ] && return
+
+	srv_ip=$(uci -q get shadowsocks-rust.${cfgserver}.server)
+	if [ -n "$srv_ip" ] && [ -z "$(echo "$ss_redir_servers" | grep "$srv_ip")" ]; then
+		if [ -z "$ss_redir_servers" ]; then
+			ss_redir_servers="$srv_ip"
+		else
+			ss_redir_servers="$ss_redir_servers $srv_ip"
+		fi
+	fi
+
+	port=$(uci -q get shadowsocks-rust.$cfg.local_port)
+	mode=$(uci -q get shadowsocks-rust.$cfg.mode)
+	mode="${mode:-tcp_only}"
+
+	if [ "$mode" = "tcp_only" ] || [ "$mode" = "tcp_and_udp" ]; then
+		eval "ss_rules_redir_tcp_$cfg=$port"
+	fi
+	if [ "$mode" = "udp_only" ] || [ "$mode" = "tcp_and_udp" ]; then
+		eval "ss_rules_redir_udp_$cfg=$port"
+	fi
+}
+
 ss_rules_nft_gen() {
 	local cfg="ss_rules"
 	local cfgtype
@@ -182,7 +215,7 @@ ss_rules_nft_gen() {
 	config_get server "$cfg" server
 	[ "$(uci -q get shadowsocks-rust.${server}.disabled)" = "1" ] && return 2
 
-	if [ "$ss_rules_redir_tcp_$redir_tcp" = "all" ]; then
+	if [ "$redir_tcp" = "all" ]; then
 		min_ss_redir_ports="65535"
 		max_ss_redir_ports="0"
 		config_load shadowsocks-rust
@@ -194,7 +227,7 @@ ss_rules_nft_gen() {
 			all_ss_redir_ports=$min_ss_redir_ports
 		fi
 		local_port_tcp="$all_ss_redir_ports"
-		if [ "$ss_rules_redir_udp_$redir_udp" = "all" ] || [ "$ss_rules_redir_udp_$redir_udp" = "hi1" ]; then
+		if [ "$redir_udp" = "all" ] || [ "$redir_udp" = "hi1" ]; then
 			local_port_udp="$min_ss_redir_ports"
 		fi
 	else
@@ -261,6 +294,13 @@ ss_rules_nft_reset() {
 }
 
 ss_rules() {
+	config_load shadowsocks-rust
+	config_foreach ss_collect_redir_info ss_redir
+	if [ -n "$(uci show openmptcprouter)" ]; then
+		config_load openmptcprouter
+		config_foreach ss_omr_servers server
+		config_load shadowsocks-rust
+	fi
 	if ! ss_rules_nft_gen; then
 		ss_rules_nft_reset
 	fi
@@ -270,6 +310,8 @@ rules_up() {
 	if [ -f "${ssrules_nft}.down" ]; then
 		mv -f "${ssrules_nft}.down" "$ssrules_nft"
 		fw4 -q reload
+	elif [ ! -f "$ssrules_nft" ]; then
+		ss_rules
 	fi
 }
 

@@ -2340,6 +2340,8 @@ rules_up() {
 			mv -f "$f" "$(echo "$f" | sed 's/.down//g')"
 		done
 		fw4 -q reload
+	elif [ ! -f "$xrrules_nft" ]; then
+		/etc/init.d/xray restart &
 	fi
 }
 

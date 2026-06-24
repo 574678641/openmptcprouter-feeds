@@ -2262,6 +2262,8 @@ rules_up() {
 	if [ -f "${v2rrules_nft}.down" ]; then
 		mv -f "${v2rrules_nft}.down" "$v2rrules_nft"
 		fw4 -q reload
+	elif [ ! -f "$v2rrules_nft" ]; then
+		/etc/init.d/v2ray restart &
 	fi
 }
 

@@ -176,6 +176,26 @@ ss_redir_ports() {
 	fi
 }
 
+ss_collect_redir_info() {
+	local cfg="$1"
+	local srv_ip cfgserver disabled srv_disabled
+
+	disabled=$(uci -q get shadowsocks-libev.$cfg.disabled)
+	[ "$disabled" = "1" ] && return
+	cfgserver=$(uci -q get shadowsocks-libev.$cfg.server)
+	srv_disabled=$(uci -q get shadowsocks-libev.${cfgserver}.disabled)
+	[ "$srv_disabled" = "1" ] && return
+
+	srv_ip=$(uci -q get shadowsocks-libev.${cfgserver}.server)
+	if [ -n "$srv_ip" ] && [ -z "$(echo "$ss_redir_servers" | grep "$srv_ip")" ]; then
+		if [ -z "$ss_redir_servers" ]; then
+			ss_redir_servers="$srv_ip"
+		else
+			ss_redir_servers="$ss_redir_servers $srv_ip"
+		fi
+	fi
+}
+
 ss_rules_nft_gen() {
 	#local cfg="ss_rules"
 	local cfg="$1"
@@ -280,10 +300,13 @@ ss_rules_nft_reset() {
 
 ss_rules() {
 	config_load shadowsocks-libev
+	config_foreach ss_collect_redir_info ss_redir
+	if [ -n "$(uci show openmptcprouter)" ]; then
+		config_load openmptcprouter
+		config_foreach ss_omr_servers server
+		config_load shadowsocks-libev
+	fi
 	config_foreach ss_rules_nft_gen ss_rules
-	#if ! ss_rules_nft_gen; then
-	#	ss_rules_nft_reset
-	#fi
 }
 
 rules_up() {
@@ -292,6 +315,8 @@ rules_up() {
 			mv -f "$f" "$(echo "$f" | sed 's/.down//g')"
 		done
 		fw4 -q reload
+	elif [ ! -f "$ssrules_nft" ]; then
+		ss_rules
 	fi
 }
 
