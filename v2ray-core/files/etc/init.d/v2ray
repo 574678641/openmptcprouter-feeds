@@ -12,6 +12,9 @@ EXTRA_COMMANDS="rules_up rules_down rules_exist"
 NAME=v2ray
 CONFIG_FOLDER=/var/etc/$NAME
 
+v2rrules_uc="/usr/share/v2ray-rules/v2r-rules.uc"
+v2rrules_nft="/etc/nftables.d/90-proxy-v2ray-rules.nft"
+
 FILE_V2RAY_DNSMASQ=/tmp/dnsmasq.d/$NAME
 FILE_V2RAY_DNSMASQ_CACHE=/tmp/$NAME.dnsmasq.cache
 
@@ -23,6 +26,7 @@ IPSET_SRC_DIRECT_V4=ss_rules_src_bypass
 IPSET_DST_DIRECT_V4=ss_rules_dst_bypass
 IPSET_DST_DIRECT_V6=ss_rules6_dst_bypass
 
+OUTBOUND_SERVERS=
 OUTBOUND_SERVERS_V4=
 OUTBOUND_SERVERS_V6=
 
@@ -44,11 +48,23 @@ _log() {
 }
 
 _info() {
-	_log "info" $@
+	_log "info" "$@"
 }
 
 _err() {
-	_log "err" $@
+	_log "err" "$@"
+}
+
+# _nft_set_populate <set> <type> <addr-list-on-stdin>
+# Idempotently (re)creates a native nft set in table "inet fw4" and loads
+# addresses/CIDRs read from stdin into it -- the nft-native replacement for
+# `ipset -! restore` (this package no longer depends on the ipset binary).
+_nft_set_populate() {
+	local set="$1" type="$2"
+	{
+		echo "add set inet fw4 $set { type $type; flags interval; }"
+		sed "s/.*/add element inet fw4 $set { & }/"
+	} | nft -f - 2>/dev/null
 }
 
 version_over_5_4() {
@@ -137,11 +153,13 @@ append_server_address() {
 	local ipv4
 	for ipv4 in $(resolveip -4 -t 5 "$addr") ; do
 		append_server_ipv4 "$ipv4"
+		OUTBOUND_SERVERS="$OUTBOUND_SERVERS $ipv4"
 	done
 
 	local ipv6
 	for ipv6 in $(resolveip -6 -t 5 "$addr") ; do
 		append_server_ipv6 "$ipv6"
+		OUTBOUND_SERVERS="$OUTBOUND_SERVERS $ipv6"
 	done
 }
 
@@ -441,23 +459,68 @@ add_v2ray_redirect_rules() {
 
 	local port="$TRANSPARENT_PROXY_PORT"
 	local addition="$TRANSPARENT_PROXY_ADDITION"
+	local tproxy="$TRANSPARENT_PROXY_USE_TPROXY"
 	local ipset_src_direct="$IPSET_SRC_DIRECT_V4"
 	local ipset_dst_direct="$IPSET_DST_DIRECT_V4"
 
 	test -n "$port" || return
 
-	# This part need a rewrite
-	v2ray-rules -f
-	#logger -t "v2ray" "v2ray-rules -l ${port} -L ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
-	commandline="-l ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
-	[ "$(uci -q get v2ray.main_transparent_proxy.redirect_udp)" = "1" ] && [ "$(uci -q get v2ray.omrout.protocol)" != "socks" ] && commandline="$commandline -L ${port}"
-	v2ray-rules $commandline
-	[ "$(uci -q get v2ray.main.inbounds | grep omr6)" != "" ] && [ -n "$OUTBOUND_SERVERS_V6" ] && {
-		v2ray-rules6 -f
-		commandline="-l $((port+1)) -L $((port+1)) -s $OUTBOUND_SERVERS_V6 --rule-name def --src-default forward --dst-default forward --local-default forward"
-		[ "$(uci -q get v2ray.main_transparent_proxy.redirect_udp)" = "1" ] && ([ "$(uci -q get v2ray.omrout.protocol)" = "vless" ] || [ "$(uci -q get v2ray.omrout.protocol)" = "vmess" ]) && commandline="$commandline -L ${port+1}"
-		v2ray-rules6 $commandline
-	}
+	## This part need a rewrite
+	#v2ray-rules -f
+	##logger -t "v2ray" "v2ray-rules -l ${port} -L ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
+	#commandline="-l ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
+	#[ "$(uci -q get v2ray.main_transparent_proxy.redirect_udp)" = "1" ] && [ "$(uci -q get v2ray.omrout.protocol)" != "socks" ] && commandline="$commandline -L ${port}"
+	#v2ray-rules $commandline
+	#[ "$(uci -q get v2ray.main.inbounds | grep omr6)" != "" ] && [ -n "$OUTBOUND_SERVERS_V6" ] && {
+	#	v2ray-rules6 -f
+	#	commandline="-l $((port+1)) -L $((port+1)) -s $OUTBOUND_SERVERS_V6 --rule-name def --src-default forward --dst-default forward --local-default forward"
+	#	[ "$(uci -q get v2ray.main_transparent_proxy.redirect_udp)" = "1" ] && ([ "$(uci -q get v2ray.omrout.protocol)" = "vless" ] || [ "$(uci -q get v2ray.omrout.protocol)" = "vmess" ]) && commandline="$commandline -L ${port+1}"
+	#	v2ray-rules6 $commandline
+	#}
+
+	remote_servers="$(echo $OUTBOUND_SERVERS \
+		| tr ' ' '\n' \
+		| sort -u \
+		| xargs -n 1 resolveip -t 5 \
+		| sort -u)"
+
+	[ "$(uci -q get v2ray.main_transparent_proxy.redirect_udp)" = "1" ] && [ "$(uci -q get v2ray.omrout.protocol)" != "socks" ] && portudp="$port"
+	ifnames="$(uci -q get shadowsocks-libev.ss_rules.ifnames)"
+	[ -z "$ifnames" ] && ifnames="$(uci -q get shadowsocks-rust.ss_rules.ifnames)"
+
+	local tmp="/tmp/v2rrules"
+	json_init
+	json_add_string o_remote_servers "$remote_servers"
+	json_add_int o_redir_tcp_port "$port"
+	json_add_int o_redir_udp_port "$portudp"
+	json_add_int o_tproxy "$tproxy"
+	json_add_string o_ifnames "$ifnames"
+	json_add_string o_local_default "forward"
+	json_add_string o_src_bypass "$src_ips_bypass"
+	json_add_string o_src_forward "$src_ips_forward"
+	json_add_string o_src_checkdst "$src_ips_checkdst"
+	json_add_string o_src_default "checkdst"
+	json_add_string o_dst_bypass "$dst_ips_bypass"
+	json_add_string o_dst_forward "$dst_ips_forward"
+	json_add_string o_dst_bypass_file "$dst_ips_bypass_file"
+	json_add_string o_dst_forward_file "$dst_ips_forward_file"
+	json_add_string o_dst_default "forward"
+	json_add_string o_nft_tcp_extra "$nft_tcp_extra"
+	json_add_string o_nft_udp_extra "$nft_udp_extra"
+	json_dump -i >"$tmp.json"
+
+	if utpl -S -F "$tmp.json" "$v2rrules_uc" >"$tmp.nft" \
+		&& ! cmp -s "$tmp.nft" "$v2rrules_nft"; then
+		echo "table inet chk {include \"$tmp.nft\";}" >"$tmp.nft.chk"
+		if nft -f "$tmp.nft.chk" -c; then
+			mv "$tmp.nft" "$v2rrules_nft"
+			fw4 -q reload
+		fi
+		rm -f "$tmp.nft.chk"
+	fi
+	rm -f "$tmp.json"
+	rm -f "$tmp.nft"
+
 	[ -f /etc/init.d/omr-bypass ] && [ -z "$(pgrep -f omr-bypass)" ] && {
 		logger -t "v2ray" "Reload omr-bypass rules"
 		/etc/init.d/omr-bypass reload_rules
@@ -477,23 +540,21 @@ init_rules_for_listfile() {
 	if [ -n "$direct_content" ] ; then
 		echo "$direct_content" | \
 			grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?" | \
-			sed "s/.*/add $IPSET_DST_DIRECT_V4 & timeout 0/" | \
-			ipset -! restore 2>/dev/null
+			_nft_set_populate "$IPSET_DST_DIRECT_V4" ipv4_addr
 
 		echo "$direct_content" | \
 			grep -oE "([0-9a-fA-F]{0,4}:){1,7}([0-9a-fA-F]){0,4}(/[0-9]{1,2})?" | \
-			sed "s/.*/add $IPSET_DST_DIRECT_V6 & timeout 0/" | \
-			ipset -! restore 2>/dev/null
+			_nft_set_populate "$IPSET_DST_DIRECT_V6" ipv6_addr
 
 		if [ -n "$direct_list_dns" ] ; then
 			echo "$direct_content" | \
 				grep -oE "([0-9a-zA-Z_-]+\.)+[a-zA-Z]{2,}$" | \
-				sed "s|.*|server=/&/$direct_list_dns\nipset=/&/$IPSET_DST_DIRECT_V4,$IPSET_DST_DIRECT_V6|" \
+				sed "s|.*|server=/&/$direct_list_dns\nnftset=/&/4#inet#fw4#$IPSET_DST_DIRECT_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_DIRECT_V6|" \
 				>>"$FILE_V2RAY_DNSMASQ_CACHE"
 		else
 			echo "$direct_content" | \
 				grep -oE "([0-9a-zA-Z_-]+\.)+[a-zA-Z]{2,}$" | \
-				sed "s|.*|ipset=/&/$IPSET_DST_DIRECT_V4,$IPSET_DST_DIRECT_V6|" \
+				sed "s|.*|nftset=/&/4#inet#fw4#$IPSET_DST_DIRECT_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_DIRECT_V6|" \
 				>>"$FILE_V2RAY_DNSMASQ_CACHE"
 		fi
 	fi
@@ -505,23 +566,21 @@ init_rules_for_listfile() {
 	if [ -n "$proxy_content" ] ; then
 		echo "$proxy_content" | \
 			grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?" | \
-			sed "s/.*/add $IPSET_DST_PROXY_V4 & timeout 0/" | \
-			ipset -! restore 2>/dev/null
+			_nft_set_populate "$IPSET_DST_PROXY_V4" ipv4_addr
 
 		echo "$proxy_content" | \
 			grep -oE "([0-9a-fA-F]{0,4}:){1,7}([0-9a-fA-F]){0,4}(/[0-9]{1,2})?" | \
-			sed "s/.*/add $IPSET_DST_PROXY_V6 & timeout 0/" | \
-			ipset -! restore 2>/dev/null
+			_nft_set_populate "$IPSET_DST_PROXY_V6" ipv6_addr
 
 		if [ -n "$proxy_list_dns" ] ; then
 			echo "$proxy_content" | \
 				grep -oE "([0-9a-zA-Z_-]+\.)+[a-zA-Z]{2,}$" | \
-				sed "s|.*|server=/&/$proxy_list_dns\nipset=/&/$IPSET_DST_PROXY_V4,$IPSET_DST_PROXY_V6|" \
+				sed "s|.*|server=/&/$proxy_list_dns\nnftset=/&/4#inet#fw4#$IPSET_DST_PROXY_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_PROXY_V6|" \
 				>>"$FILE_V2RAY_DNSMASQ_CACHE"
 		else
 			echo "$proxy_content" | \
 				grep -oE "([0-9a-zA-Z_-]+\.)+[a-zA-Z]{2,}$" | \
-				sed "s|.*|ipset=/&/$IPSET_DST_PROXY_V4,$IPSET_DST_PROXY_V6|" \
+				sed "s|.*|nftset=/&/4#inet#fw4#$IPSET_DST_PROXY_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_PROXY_V6|" \
 				>>"$FILE_V2RAY_DNSMASQ_CACHE"
 		fi
 	fi
@@ -533,8 +592,7 @@ init_rules_for_listfile() {
 	if [ -n "$src_content" ] ; then
 		echo "$src_content" | \
 			grep -oE "[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?" | \
-			sed "s/.*/add $IPSET_SRC_DIRECT_V4 & timeout 0/" | \
-			ipset -! restore 2>/dev/null
+			_nft_set_populate "$IPSET_SRC_DIRECT_V4" ipv4_addr
 	fi
 
 }
@@ -1934,15 +1992,11 @@ setup_transparent_proxy() {
 			local chnroute6="$(get_file_content "chnroute6")"
 
 			if [ -n "$chnroute" ] ; then
-				ipset -! restore <<-EOF 2>/dev/null
-					$(echo "$chnroute" | sed "s/.*/add $IPSET_DST_DIRECT_V4 & timeout 0/")
-				EOF
+				echo "$chnroute" | _nft_set_populate "$IPSET_DST_DIRECT_V4" ipv4_addr
 			fi
 
 			if [ -n "$chnroute6" ] ; then
-				ipset -! restore <<-EOF 2>/dev/null
-					$(echo "$chnroute6" | sed "s/.*/add $IPSET_DST_DIRECT_V6 & timeout 0/")
-				EOF
+				echo "$chnroute6" | _nft_set_populate "$IPSET_DST_DIRECT_V6" ipv6_addr
 			fi
 
 			ext_args=
@@ -1952,18 +2006,14 @@ setup_transparent_proxy() {
 			local chnroute6="$(get_file_content "chnroute6")"
 
 			if [ -n "$chnroute" ] ; then
-				ipset -! restore <<-EOF 2>/dev/null
-					$(echo "$chnroute" | sed "s/.*/add $IPSET_DST_PROXY_V4 & timeout 0/")
-				EOF
+				echo "$chnroute" | _nft_set_populate "$IPSET_DST_PROXY_V4" ipv4_addr
 			fi
 
 			if [ -n "$chnroute6" ] ; then
-				ipset -! restore <<-EOF 2>/dev/null
-					$(echo "$chnroute6" | sed "s/.*/add $IPSET_DST_PROXY_V6 & timeout 0/")
-				EOF
+				echo "$chnroute6" | _nft_set_populate "$IPSET_DST_PROXY_V6" ipv6_addr
 			fi
 
-			ext_args="-m set --match-set $IPSET_DST_PROXY_V4 dst"
+			ext_args="ip daddr @$IPSET_DST_PROXY_V4"
 			;;
 		"gfwlist_proxy")
 			local gfwlist="$(get_file_content "gfwlist")"
@@ -1971,16 +2021,16 @@ setup_transparent_proxy() {
 			if [ -n "$gfwlist" ] ; then
 				if [ -n "$proxy_list_dns" ] ; then
 					echo "$gfwlist" | \
-						sed "s|.*|server=/&/$proxy_list_dns\nipset=/&/$IPSET_DST_PROXY_V4,$IPSET_DST_PROXY_V6|" \
+						sed "s|.*|server=/&/$proxy_list_dns\nnftset=/&/4#inet#fw4#$IPSET_DST_PROXY_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_PROXY_V6|" \
 						>> "$FILE_V2RAY_DNSMASQ_CACHE"
 				else
 					echo "$gfwlist" | \
-						sed "s|.*|ipset=/&/$IPSET_DST_PROXY_V4,$IPSET_DST_PROXY_V6|" \
+						sed "s|.*|nftset=/&/4#inet#fw4#$IPSET_DST_PROXY_V4\nnftset=/&/6#inet#fw4#$IPSET_DST_PROXY_V6|" \
 						>> "$FILE_V2RAY_DNSMASQ_CACHE"
 				fi
 			fi
 
-			ext_args="-m set --match-set $IPSET_DST_PROXY_V4 dst"
+			ext_args="ip daddr @$IPSET_DST_PROXY_V4"
 			;;
 		*)
 			ext_args=
@@ -2036,7 +2086,13 @@ setup_transparent_proxy() {
 }
 
 clear_transparent_proxy() {
-	v2ray-rules -f
+	if [ -f "${v2rrules_nft}" ] || [ -f "${v2rrules_nft}.down" ]; then
+		rm -f "$v2rrules_nft"
+		rm -f "${v2rrules_nft}.down"
+		fw4 -q reload
+	fi
+
+	#v2ray-rules -f
 
 	if [ -s "$FILE_V2RAY_DNSMASQ" ] ; then
 		rm -f "$FILE_V2RAY_DNSMASQ"
@@ -2046,6 +2102,10 @@ clear_transparent_proxy() {
 
 start_instance() {
 	local section="$1"
+	[ -n "$(uci -q get firewall.v2ray)" ] && {
+		uci -q del firewall.v2ray
+		uci -q commit firewall
+	}
 
 	if ! v2ray_section_validate "$section" ; then
 		_err "Invalid config."
@@ -2072,7 +2132,7 @@ start_instance() {
 			return 1
 		fi
 
-		if ! ( eval "$v2ray_file test -config \"$config_file\" >/dev/null 2>&1" ) ; then
+		if ! "$v2ray_file" test -config "$config_file" >/dev/null 2>&1 ; then
 			_err "Validate config file failed: $config_file"
 			return 1
 		fi
@@ -2181,6 +2241,7 @@ start_instance() {
 	fi
 
 	procd_set_param file "$temp_config"
+	procd_set_param nice 10
 	procd_set_param stderr 1 # forward stderr of the command to logd
 	procd_set_param stdout 1
 	procd_set_param pidfile "/var/run/${NAME}.${section}.pid"
@@ -2188,55 +2249,57 @@ start_instance() {
 }
 
 rules_exist() {
-	[ -n "$(iptables -w -t nat -L -n 2>/dev/null | grep v2r_)" ] && return 0
-	return 1
+	#[ -n "$(iptables -w -t nat -L -n 2>/dev/null | grep v2r_)" ] && return 0
+	if [ -f "$v2rrules_nft" ]; then
+		return 0
+	else
+		return 1
+	fi
 }
 
 rules_up() {
-	rules_exist && {
-		[ -f /bin/blocklanfw ] && /bin/blocklanfw 2>&1 >/dev/null
-		return 0
-	}
-	enabled="0"
-	config_load v2ray
-	config_get enabled main enabled "0"
-	[ "$enabled" = "0" ] && return
-	if [ "$(uci -q get v2ray.omrout.protocol)" = "vless" ]; then
-		OUTBOUND_SERVERS_V4="$(uci -q get v2ray.omrout.s_vless_address)"
-		OUTBOUND_SERVERS_V6="$(uci -q get v2ray.omrout.s_vless_address)"
-	elif [ "$(uci -q get v2ray.omrout.protocol)" = "vmess" ]; then
-		OUTBOUND_SERVERS_V4="$(uci -q get v2ray.omrout.s_vmess_address)"
-		OUTBOUND_SERVERS_V6="$(uci -q get v2ray.omrout.s_vmess_address)"
-	elif [ "$(uci -q get v2ray.omrout.protocol)" = "trojan" ]; then
-		OUTBOUND_SERVERS_V4="$(uci -q get v2ray.omrout.s_trojan_address)"
-		OUTBOUND_SERVERS_V6="$(uci -q get v2ray.omrout.s_trojan_address)"
-	elif [ "$(uci -q get v2ray.omrout.protocol)" = "socks" ]; then
-		OUTBOUND_SERVERS_V4="$(uci -q get v2ray.omrout.s_socks_address)"
-		OUTBOUND_SERVERS_V6="$(uci -q get v2ray.omrout.s_socks_address)"
+	# Don't self-heal missing rules by restarting a v2ray that isn't even
+	# supposed to be running: v2ray.main.enabled is the only correct signal
+	# for that (NOT network.omrvpn.disabled -- that's the VPN interface's own
+	# flag and is unrelated to whether v2ray/xray, which can run standalone
+	# with no VPN at all, should be up). Without this, whenever wait_proxy=0
+	# and no instance is configured/enabled (disabled server, proxy switched
+	# away, empty/broken outbound config, ...), the missing rules file makes
+	# every caller of rules_up() -- procd, the omr-tracker-v2ray watchdog,
+	# the firewall.v2ray-rules hotplug, manual restart -- re-trigger
+	# `/etc/init.d/v2ray restart &` forever, independent of procd's own
+	# respawn handling (issue #4347).
+	[ "$(uci -q get v2ray.main.enabled)" = "1" ] || return 0
+
+	if [ -f "${v2rrules_nft}.down" ]; then
+		mv -f "${v2rrules_nft}.down" "$v2rrules_nft"
+		fw4 -q restart
+		conntrack -F 2>/dev/null || true
+	elif [ ! -f "$v2rrules_nft" ]; then
+		/etc/init.d/v2ray restart &
+	elif ! nft list ruleset 2>/dev/null | grep -qE 'goto v2r_rules_pre_src_(tcp|udp)'; then
+		# The include file itself is present and not parked in .down (so by
+		# file-state alone the rules "should" already be live), but an
+		# external full nftables rebuild/flush -- e.g. a firewall reload
+		# triggered by an unrelated service restart or netifd interface
+		# churn racing the same restart_all_async() cascade that (re)started
+		# v2ray -- can drop the actually *live* redirect without ever
+		# touching this file (issues #4337/#3251). File presence alone is
+		# therefore not sufficient evidence the rules are live; the
+		# omr-tracker-v2ray watchdog already checks this same live "goto"
+		# marker (not bare chain existence, see its _v2ray_rules_missing())
+		# for exactly this reason -- mirror that check here so rules_up()
+		# actually repairs what it's asked to instead of silently no-op'ing.
+		fw4 -q reload
+		conntrack -F 2>/dev/null || true
 	fi
-	TRANSPARENT_PROXY_PORT="$(uci -q get v2ray.omr.port)"
-	[ -n "$OUTBOUND_SERVERS_V4" ] || [ -n "$OUTBOUND_SERVERS_V6" ] && {
-		logger -t "v2ray" "Rules UP"
-		add_v2ray_redirect_rules
-	}
-	[ -f /etc/init.d/omr-bypass ] && [ -z "$(pgrep -f omr-bypass)" ] && {
-		logger -t "v2ray" "Reload omr-bypass rules"
-		/etc/init.d/omr-bypass reload_rules
-	}
-	[ -f /bin/blocklanfw ] && /bin/blocklanfw 2>&1 >/dev/null
 }
 
 rules_down() {
-	rules_exist || return 0
-	logger -t "v2ray" "Rules DOWN"
-	local bin="/usr/bin/v2ray-rules"
-	[ -x "$bin" ] && {
-		"$bin" -f >/dev/null 2>&1
-	}
-	local bin6="/usr/bin/v2ray-rules6"
-	[ -x "$bin6" ] && {
-		"$bin6" -f >/dev/null 2>&1
-	}
+	if [ -f "${v2rrules_nft}" ]; then
+		mv -f "$v2rrules_nft" "${v2rrules_nft}.down"
+		fw4 -q restart
+	fi
 }
 
 start_service() {
@@ -2253,7 +2316,13 @@ start_service() {
 
 	setup_transparent_proxy
 	gracefully_restart_dnsmasq
-	rules_up
+	local wait_proxy
+	wait_proxy=$(uci -q get v2ray.main_transparent_proxy.wait_proxy 2>/dev/null)
+	if [ "${wait_proxy:-1}" = "1" ]; then
+		rules_down
+	else
+		rules_up
+	fi
 
 	unset OUTBOUND_SERVERS_V4 \
 		OUTBOUND_SERVERS_V6 \
@@ -2273,6 +2342,16 @@ stop_service() {
 	rules_down
 	gracefully_restart_dnsmasq
 	test -d "$CONFIG_FOLDER" && rm -rf "$CONFIG_FOLDER"
+}
+
+restart_service() {
+	stop
+	start
+}
+
+reload_service() {
+	stop
+	start
 }
 
 service_triggers() {

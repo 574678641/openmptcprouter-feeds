@@ -8,7 +8,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=xray
-PKG_VERSION:=25.8.3
+PKG_VERSION:=26.7.11
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MPLv2
@@ -16,12 +16,16 @@ PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=Yannick Chabanois <contact@openmptcprouter.com>
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/XTLS/Xray-core.git
-PKG_SOURCE_VERSION:=bd86732f68209a4fc0db490ebb612337cde51dd8
+PKG_SOURCE_VERSION:=50231eaff98ccc31b5cbd247a721c16e97fe5ec1
 
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 
 GO_PKG:=github.com/XTLS/Xray-core
+GO_PKG_BUILD_PKG:=github.com/xtls/xray-core/main
+GO_PKG_LDFLAGS_X:= \
+    $(GO_PKG)/core.build=OpenWrt \
+    $(GO_PKG)/core.version=$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/openmptcprouter/golang/golang-package.mk
@@ -35,17 +39,13 @@ endef
 
 define Package/$(PKG_NAME)-core
 	$(call Package/$(PKG_NAME)/template)
-	PROVIDES:=xray-core
+#	PROVIDES:=xray-core
 endef
 
 define Package/$(PKG_NAME)-config
 	$(call Package/$(PKG_NAME)/template)
 	TITLE+= (init script)
-endef
-
-define Package/$(PKG_NAME)-config-nft
-	$(call Package/$(PKG_NAME)/template)
-	TITLE+= (init script with nft)
+	DEPENDS+=+firewall4 +ip +resolveip +ucode +ucode-mod-fs +kmod-nft-tproxy @!LINUX_5_4
 endef
 
 define Package/$(PKG_NAME)-core/description
@@ -53,11 +53,7 @@ define Package/$(PKG_NAME)-core/description
 endef
 
 define Package/$(PKG_NAME)-config/description
-	Xray-core init script
-endef
-
-define Package/$(PKG_NAME)-config-nft/description
-	Xray-core init script with nft support
+	Xray-core init script (nftables-native)
 endef
 
 define Package/$(PKG_NAME)-core/config
@@ -90,14 +86,7 @@ endef
 
 define Package/$(PKG_NAME)-config/install
 	$(CP) ./files/* $(1)/
-	rm -f $(1)/etc/init.d/xray-nft
-endef
-
-define Package/$(PKG_NAME)-config-nft/install
-	$(CP) ./files/* $(1)/
-	mv $(1)/etc/init.d/xray-nft $(1)/etc/init.d/xray
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)-core))
 $(eval $(call BuildPackage,$(PKG_NAME)-config))
-$(eval $(call BuildPackage,$(PKG_NAME)-config-nft))

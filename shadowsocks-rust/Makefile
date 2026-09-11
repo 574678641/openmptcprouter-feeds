@@ -8,9 +8,9 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=shadowsocks-rust
-PKG_VERSION:=1.23.5
-PKG_HASH:=edeef2408ae54108fa176b4e59cb04b4ef4dbe62da96d2459d9821b238ad94e8
-PKG_RELEASE:=1
+PKG_VERSION:=1.24.0
+PKG_HASH:=a89865d1c5203de1b732017dd032e85f943d1592e8d3152eb7d2c4f3fca387bf
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/shadowsocks/shadowsocks-rust/tar.gz/v$(PKG_VERSION)?
@@ -28,6 +28,8 @@ include $(TOPDIR)/feeds/openmptcprouter/rust/rust-package.mk
 ifeq ($(ARCH),i386)
     RUSTC_LDFLAGS+=-C target-feature=+sse2
 endif
+
+CARGO_PKG_CONFIG_VARS += CARGO_PROFILE_RELEASE_PANIC=abort
 
 define Package/shadowsocks-rust/Default
   define Package/shadowsocks-rust-$(1)

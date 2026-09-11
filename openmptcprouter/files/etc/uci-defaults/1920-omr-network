@@ -65,6 +65,7 @@ _setup_wan_interface() {
 	set network.$1.defaultroute=0
 	set network.$1.delegate=0
 	set network.$1.addlatency=0
+	set network.$1.qdisc=fq
 	delete network.$1.ifname
 	set network.${1}_dev=device
 	set network.${1}_dev.name=$2
@@ -99,18 +100,34 @@ if [ -z "$(uci -q get network.globals.packet_steering)" ]; then
 	EOF
 fi
 
-if [ "$(uci -q show network.lan | grep multipath)" != "" ]; then
+# A lan interface already carrying "multipath" means this config was shaped
+# by OMR or by a provisioning tool, so the layout built below is not this
+# box's to impose. STEER images spell the section "LAN", and uci section
+# names are case sensitive.
+if [ "$(uci -q show network.lan | grep multipath)" != "" ] \
+   || [ "$(uci -q show network.LAN | grep multipath)" != "" ]; then
+	exit 0
+fi
+if [ "$(uci -q get steer-cloud-init.global.enabled)" != "0" ] \
+   && [ "$(uci -q get steer-cloud-init.global.apply_network)" != "0" ] \
+   && { [ -n "$(uci -q get steer-cloud-init.global.instance_id)" ] \
+        || [ -f /var/lib/steer-cloud-init/data/.pending ]; }; then
 	exit 0
 fi
 
 lanif="eth0"
-if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ]; then
+if [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "friendlyarm,nanopi-r5c" ] || [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep 'mt2500')" ]; then
 	lanif="eth0"
 elif [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4" ] || [ "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | tr -d '\n')" = "bananapi,bpi-r4-poe" ]; then
 	lanif="wan"
 elif [ "$(grep rockchip /etc/os-release)" != "" ]; then
 	lanif="eth1"
 elif [ "$(grep filogic /etc/os-release)" != "" ]; then
+	if [ -d /sys/class/net/wan ]; then
+		lanif="wan"
+	else
+		lanif="eth1"
+	fi
 	lanif="eth1"
 elif [ -n "$(cat /etc/board.json | jsonfilter -q -e '@.model.id' | grep bananapi_bpi-r3)" ]; then
 	lanif="eth0"
@@ -502,7 +519,7 @@ if ([ "$board" = "teltonika,rutx" ] || [ "$board" = "teltonika,rutx12" ] || [ "$
 	EOF
 
 fi
-if [ "$board" = "z8102ax-128m" ] || [ "$board" = "z8102ax-64m" ] || [ "$board" = "z8102ax" ]; then
+if [ "$board" = "z8102ax-128m" ] || [ "$board" = "z8102ax-64m" ] || [ "$board" = "z8102ax" ] || [ "$board" = "z8802be" ]; then
 	uci -q batch <<-EOF
 	set network.modem1=interface
 	set network.modem1.proto='modemmanager'

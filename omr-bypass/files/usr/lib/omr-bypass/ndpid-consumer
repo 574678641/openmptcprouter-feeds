@@ -1,0 +1,98 @@
+#!/bin/sh
+# Copyright (C) 2024 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter
+#
+# nDPId consumer for omr-bypass.
+# Reads flow detection events from the ndpisrvd distributor socket and adds
+# destination IPs to the appropriate nftables named sets so that traffic
+# classified by nDPId is bypassed according to omr-bypass protocol rules.
+#
+# Usage: ndpid-consumer <proto_list>
+#   proto_list: space-separated entries of the form  proto:intf:intfid:dscp
+#               as written by _bypass_ndpid_collect_proto in omr-bypass-nft.
+#               intf and dscp are independent and either may be empty: intf
+#               drives the routing-bypass fwmark set, dscp drives the
+#               omr_dscp_<class> ipset -- a rule can populate one, the
+#               other, or both from the same detected flow.
+
+PIDFILE="/var/run/omr-bypass-ndpid.pid"
+SOCK="/var/run/ndpid/distributor.sock"
+
+proto_list="$1"
+[ -z "$proto_list" ] && exit 1
+
+echo $$ > "$PIDFILE"
+
+# ndpisrvd exposes two distributor endpoints:
+#   - TCP (127.0.0.1:7000 by default) — works with GNU netcat and BusyBox nc
+#   - Unix socket ($SOCK)             — requires OpenBSD netcat or socat
+# Prefer TCP so the consumer works on OpenWrt with GNU netcat.
+TCP_HOST=$(uci -q get ndpid.distributor.tcp_address 2>/dev/null)
+TCP_PORT=$(uci -q get ndpid.distributor.tcp_port 2>/dev/null)
+TCP_HOST=${TCP_HOST:-127.0.0.1}
+TCP_PORT=${TCP_PORT:-7000}
+
+_nc_distributor() {
+	# GNU netcat exits when stdin reaches EOF; pipe from tail -f /dev/null to
+	# provide a never-ending stdin so the connection stays open for events.
+	if tail -f /dev/null | nc "$TCP_HOST" "$TCP_PORT" 2>/dev/null; then
+		return
+	fi
+	[ ! -S "$SOCK" ] && return
+	tail -f /dev/null | nc -U "$SOCK" 2>/dev/null
+}
+
+while true; do
+	_nc_distributor | while IFS= read -r line; do
+		# nDPId frames are prefixed with a 5-character hex length field
+		json="${line:5}"
+		[ -z "$json" ] && continue
+
+		event=$(echo "$json" | jsonfilter -q -e '@.flow_event_name' 2>/dev/null)
+		[ "$event" != "detected" ] && [ "$event" != "detection-update" ] && continue
+
+		proto_str=$(echo "$json" | jsonfilter -q -e '@.ndpi.proto' 2>/dev/null)
+		[ -z "$proto_str" ] && continue
+
+		# ndpisrvd uses "dst_ip" (not "l3_dst4"/"l3_dst6") and "l3_proto" ("ip4"/"ip6")
+		dst_ip=$(echo "$json" | jsonfilter -q -e '@.dst_ip' 2>/dev/null)
+		[ -z "$dst_ip" ] && continue
+		l3_proto=$(echo "$json" | jsonfilter -q -e '@.l3_proto' 2>/dev/null)
+		is_v6=0
+		[ "$l3_proto" = "ip6" ] && is_v6=1
+
+		# Normalize nDPI proto string (e.g. "TLS.Google" -> app="google", base="tls")
+		app=$(echo "$proto_str" | tr '.' '\n' | tail -1 | tr '[:upper:]' '[:lower:]')
+		base=$(echo "$proto_str" | tr '.' '\n' | head -1 | tr '[:upper:]' '[:lower:]')
+
+		for entry in $proto_list; do
+			bp=$(echo "$entry" | cut -d: -f1)
+			intf=$(echo "$entry" | cut -d: -f2)
+			dscp=$(echo "$entry" | cut -d: -f4)
+			bp_lower=$(echo "$bp" | tr '[:upper:]' '[:lower:]')
+			if [ "$bp_lower" = "$app" ] || [ "$bp_lower" = "$base" ] || \
+			   echo "$proto_str" | grep -qi "^${bp}$" || \
+			   echo "$proto_str" | grep -qi "\.${bp}$" || \
+			   echo "$proto_str" | grep -qi "^${bp}\."; then
+				# Routing-bypass fwmark and DSCP marking are independent --
+				# a rule can have an interface, a dscp class, or both (same
+				# convention as _bypass_asn/_dscp_ip for the static lists).
+				if [ "$is_v6" = "1" ]; then
+					if [ "$intf" = "all" ]; then
+						nft add element inet fw4 bypass6_${bp} { "$dst_ip" } 2>/dev/null
+					elif [ -n "$intf" ]; then
+						nft add element inet fw4 omr_dst_bypass_${intf}_6 { "$dst_ip" } 2>/dev/null
+					fi
+					[ -n "$dscp" ] && nft add element inet fw4 omr_dscp_${dscp}_6 { "$dst_ip" } 2>/dev/null
+				else
+					if [ "$intf" = "all" ]; then
+						nft add element inet fw4 bypass_${bp} { "$dst_ip" } 2>/dev/null
+					elif [ -n "$intf" ]; then
+						nft add element inet fw4 omr_dst_bypass_${intf}_4 { "$dst_ip" } 2>/dev/null
+					fi
+					[ -n "$dscp" ] && nft add element inet fw4 omr_dscp_${dscp}_4 { "$dst_ip" } 2>/dev/null
+				fi
+			fi
+		done
+	done
+	sleep 2
+done

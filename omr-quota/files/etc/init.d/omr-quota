@@ -6,54 +6,282 @@
 	USE_PROCD=1
 }
 
-_validate_section() {
-	uci_validate_section omr-quota "$1" "$2" \
-		'txquota:uinteger'  \
-		'rxquota:uinteger'  \
-		'ttquota:uinteger'  \
-		'interval:uinteger:30' \
-		'enabled:bool:0'
+# Where /bin/omr-quota keeps its runtime markers (<id>.cut, <id>.throttled,
+# <id>.downstream, <id>.blocklan, <iface>.realdev) -- tmpfs on purpose.
+# Overridable (like in the daemon) so the unit tests can drive the orphan
+# sweep against a scratch directory and a fake daemon. OMR_QUOTA_RUNTIME_DIR
+# is the canonical name -- omr-tracker's 002-error reads the *.cut markers
+# under it -- with OMR_QUOTA_THROTTLE_STATE_DIR kept as the legacy alias.
+_TSTATE_DIR="${OMR_QUOTA_RUNTIME_DIR:-${OMR_QUOTA_THROTTLE_STATE_DIR:-/tmp/omr-quota}}"
+_QUOTA_BIN="${OMR_QUOTA_BIN:-/bin/omr-quota}"
+_CONFIG_FILE="${OMR_QUOTA_CONFIG_FILE:-/etc/config/omr-quota}"
+_PERSIST_DIR="${OMR_QUOTA_STATE_DIR:-/etc/omr-quota/state}"
+
+# state_ids start_service has actually launched a daemon for, collected while
+# the config is walked -- the reference for the orphan sweep below.
+_ACTIVE_IDS=" "
+_SECTIONS_SEEN=0
+
+# Clearing reset_exceeded (UCI/ubus) only matters for exceedance_scope=persistent
+# -- month_only has no persistent marker of its own, so the daemon is also
+# told (via OMR_QUOTA_RESET_BASELINE) to record a fresh usage baseline on this
+# launch, which is what actually un-exceeds a month_only quota. state_id is
+# the identity string this section's daemon instance is launched with --
+# the interface name itself for "interface" sections, "global_<id>" for
+# "global" sections -- since that's the key its state files are written under.
+_reset_baseline_if_requested() {
+	local state_id="$1" reset_exceeded="$2" uci_section="$3"
+	if [ "$reset_exceeded" = "1" ]; then
+		rm -f "${_PERSIST_DIR}/${state_id}.exceeded"
+		uci -q set "omr-quota.${uci_section}.reset_exceeded=0"
+		uci -q commit omr-quota
+		printf '1'
+	else
+		printf '0'
+	fi
+}
+
+# _track_vnstat <iface...>: make sure vnstat counts the *device* behind each
+# quota'd interface (vnstat knows eth1/pppoe-wan, not "wan1"). Adds the
+# device to vnstat's interface list, committed, and reloads vnstat once.
+# Skips interfaces whose device can't be resolved right now (down at boot):
+# the daemon's own realdev cache covers those once they have come up once.
+# The previous version appended the logical name (never counted by vnstat)
+# and, matching the whole space-joined list instead of one entry, appended
+# it again on every reload -- as an uncommitted uci change that any later
+# "uci commit vnstat" would have written out.
+_track_vnstat() {
+	local iface dev list changed=0
+	list="$(uci -q get vnstat.@vnstat[-1].interface)"
+	for iface in "$@"; do
+		case "$iface" in
+			@*) dev="$(ifstatus "$iface" 2>/dev/null | jsonfilter -q -e '@["device"]')" ;;
+			*)  dev="$(ifstatus "$iface" 2>/dev/null | jsonfilter -q -e '@.l3_device')" ;;
+		esac
+		[ -n "$dev" ] || continue
+		case " $list " in *" $dev "*) continue ;; esac
+		uci -q add_list "vnstat.@vnstat[-1].interface=$dev"
+		list="$list $dev"
+		changed=1
+	done
+	if [ "$changed" = "1" ]; then
+		uci -q commit vnstat
+		/etc/init.d/vnstat reload >/dev/null 2>&1
+	fi
 }
 
 _launch_quota() {
 	local txquota rxquota ttquota interval enabled interface
-	_validate_section "interface" "$1"
+	local exceedance_action throttle_dl throttle_ul exceedance_scope reset_exceeded reset_baseline
+	local down_interfaces begindate enddate method percent calculation_interval block_lan
+	uci_validate_section omr-quota "interface" "$1" \
+		'txquota:uinteger'  \
+		'rxquota:uinteger'  \
+		'ttquota:uinteger'  \
+		'interval:uinteger:30' \
+		'enabled:bool:0' \
+		'down_interfaces:string' \
+		'begindate:string' \
+		'enddate:string' \
+		'method:uinteger:0' \
+		'percent:uinteger:80' \
+		'calculation_interval:uinteger:120' \
+		'block_lan:bool:0' \
+		'exceedance_action:string:cut' \
+		'throttle_dl:uinteger:1' \
+		'throttle_ul:uinteger:1' \
+		'exceedance_scope:string:month_only' \
+		'reset_exceeded:bool:0'
 	interface=$1
-	#interface=$(ifstatus "$1" | jsonfilter -q -e '@["l3_device"]')
-	#[ -n "$(echo $interface | grep '@')" ] && interface=$(ifstatus "$1" | jsonfilter -q -e '@["device"]')
 
 	[ -z "$interface" ] && return
-
+	_SECTIONS_SEEN=$((_SECTIONS_SEEN + 1))
+	# A reset requested on a disabled quota must still clear the persistent
+	# marker (and its one-shot uci flag) -- otherwise the flag stayed set
+	# and the marker cut the interface again the moment the quota was
+	# re-enabled, with no way to clear it from the UI while disabled.
+	reset_baseline=$(_reset_baseline_if_requested "$interface" "$reset_exceeded" "$interface")
 	[ -z "$txquota" ] && [ -z "$rxquota" ] && [ -z "$ttquota" ] && return
 	[ "$enabled" = "0" ] && return
+	[ -z "$down_interfaces" ] && down_interfaces="$interface"
 
-	[ "$(uci get vnstat.@vnstat[-1].interface | grep $interface)" = "" ] && {
-		uci -q batch <<-EOF
-			add_list vnstat.@vnstat[-1].interface=$interface
-		EOF
-	}
+	_track_vnstat "$interface"
 
+	_ACTIVE_IDS="${_ACTIVE_IDS}${interface} "
 	procd_open_instance
-	procd_set_param command /bin/omr-quota "$interface"
+	procd_set_param command "$_QUOTA_BIN" "$interface"
 	procd_append_param env "OMR_QUOTA_TX=$txquota"
 	procd_append_param env "OMR_QUOTA_RX=$rxquota"
 	procd_append_param env "OMR_QUOTA_TT=$ttquota"
 	procd_append_param env "OMR_QUOTA_INTERVAL=$interval"
+	procd_append_param env "OMR_QUOTA_DOWN_INTERFACES=$down_interfaces"
+	procd_append_param env "OMR_QUOTA_BEGINDATE=$begindate"
+	procd_append_param env "OMR_QUOTA_ENDDATE=$enddate"
+	procd_append_param env "OMR_QUOTA_METHOD=$method"
+	procd_append_param env "OMR_QUOTA_PERCENT=$percent"
+	procd_append_param env "OMR_QUOTA_CALCULATION_INTERVAL=$calculation_interval"
+	procd_append_param env "OMR_QUOTA_BLOCK_LAN=$block_lan"
+	procd_append_param env "OMR_QUOTA_ACTION=$exceedance_action"
+	procd_append_param env "OMR_QUOTA_THROTTLE_DL=$throttle_dl"
+	procd_append_param env "OMR_QUOTA_THROTTLE_UL=$throttle_ul"
+	procd_append_param env "OMR_QUOTA_SCOPE=$exceedance_scope"
+	procd_append_param env "OMR_QUOTA_RESET_BASELINE=$reset_baseline"
 	procd_set_param respawn 0 10 0
 	procd_set_param stderr 1
 	procd_close_instance
 }
 
+# A global quota has no single interface of its own -- it combines several
+# WANs and, when exceeded, cuts/throttles all of them (see omr-quota's
+# target_interfaces). Its daemon identity is "global_<uci section id>" so its
+# state files never collide with a same-named "interface" section, and so the
+# id stays valid for anonymous sections whose uci id is not a real ifname.
+_launch_global_quota() {
+	local txquota rxquota ttquota interval enabled interfaces
+	local exceedance_action throttle_dl throttle_ul exceedance_scope reset_exceeded reset_baseline
+	local down_interfaces begindate enddate method percent calculation_interval block_lan
+	local state_id
+	uci_validate_section omr-quota "global" "$1" \
+		'interfaces:string' \
+		'txquota:uinteger'  \
+		'rxquota:uinteger'  \
+		'ttquota:uinteger'  \
+		'interval:uinteger:30' \
+		'enabled:bool:0' \
+		'down_interfaces:string' \
+		'begindate:string' \
+		'enddate:string' \
+		'method:uinteger:0' \
+		'percent:uinteger:80' \
+		'calculation_interval:uinteger:120' \
+		'block_lan:bool:0' \
+		'exceedance_action:string:cut' \
+		'throttle_dl:uinteger:1' \
+		'throttle_ul:uinteger:1' \
+		'exceedance_scope:string:month_only' \
+		'reset_exceeded:bool:0'
+
+	state_id="global_$1"
+	_SECTIONS_SEEN=$((_SECTIONS_SEEN + 1))
+	reset_baseline=$(_reset_baseline_if_requested "$state_id" "$reset_exceeded" "$1")
+	[ -z "$interfaces" ] && return
+	[ -z "$txquota" ] && [ -z "$rxquota" ] && [ -z "$ttquota" ] && return
+	[ "$enabled" = "0" ] && return
+	[ -z "$down_interfaces" ] && down_interfaces="$interfaces"
+
+	_track_vnstat $interfaces
+
+	_ACTIVE_IDS="${_ACTIVE_IDS}${state_id} "
+	procd_open_instance
+	procd_set_param command "$_QUOTA_BIN" "$state_id"
+	procd_append_param env "OMR_QUOTA_TX=$txquota"
+	procd_append_param env "OMR_QUOTA_RX=$rxquota"
+	procd_append_param env "OMR_QUOTA_TT=$ttquota"
+	procd_append_param env "OMR_QUOTA_INTERVAL=$interval"
+	procd_append_param env "OMR_QUOTA_INTERFACES=$interfaces"
+	procd_append_param env "OMR_QUOTA_DOWN_INTERFACES=$down_interfaces"
+	procd_append_param env "OMR_QUOTA_BEGINDATE=$begindate"
+	procd_append_param env "OMR_QUOTA_ENDDATE=$enddate"
+	procd_append_param env "OMR_QUOTA_METHOD=$method"
+	procd_append_param env "OMR_QUOTA_PERCENT=$percent"
+	procd_append_param env "OMR_QUOTA_CALCULATION_INTERVAL=$calculation_interval"
+	procd_append_param env "OMR_QUOTA_BLOCK_LAN=$block_lan"
+	procd_append_param env "OMR_QUOTA_ACTION=$exceedance_action"
+	procd_append_param env "OMR_QUOTA_THROTTLE_DL=$throttle_dl"
+	procd_append_param env "OMR_QUOTA_THROTTLE_UL=$throttle_ul"
+	procd_append_param env "OMR_QUOTA_SCOPE=$exceedance_scope"
+	procd_append_param env "OMR_QUOTA_RESET_BASELINE=$reset_baseline"
+	procd_set_param respawn 0 10 0
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+# _marker_ids: every daemon identity that currently has an enforcement
+# marker under _TSTATE_DIR (see /bin/omr-quota), one per line, deduplicated.
+_marker_ids() {
+	local f id
+	for f in "$_TSTATE_DIR"/*.cut "$_TSTATE_DIR"/*.throttled "$_TSTATE_DIR"/*.downstream "$_TSTATE_DIR"/*.blocklan; do
+		[ -f "$f" ] || continue
+		id="${f##*/}"
+		printf '%s\n' "${id%.*}"
+	done | sort -u
+}
+
+# _undo_ids <id...>: hand each identity to the daemon in undo mode, which
+# lifts exactly what its markers say it enforces (see _undo_enforcement in
+# /bin/omr-quota) and deletes them.
+_undo_ids() {
+	local id
+	for id in "$@"; do
+		[ -n "$id" ] || continue
+		OMR_QUOTA_UNDO=1 "$_QUOTA_BIN" "$id"
+	done
+}
+
+# _undo_orphaned_enforcement: lift the cut/throttle/LAN block left by quotas
+# this start_service did *not* relaunch (disabled, removed, quota values
+# cleared, global section without interfaces). Without it, a disabled
+# quota's daemon is simply never started again, so its interface stayed down
+# and its tc shaper in place until a reboot.
+#
+# The reference is $_ACTIVE_IDS -- collected from the single `config_load`
+# snapshot this start_service is working from -- deliberately *not* fresh
+# `uci get` calls per marker: a concurrent `uci commit omr-quota` (set_quota
+# or reset_exceeded, which then triggers this very reload) makes those reads
+# come back empty for a moment, and treating "cannot read" as "not
+# configured" lifted the enforcement of quotas that were in fact still
+# enabled -- interfaces flapped back up mid-enforcement (seen on the bench:
+# two enabled quotas lifted at once while rpcd answered "interface not
+# found" for the same section).
+#
+# Same reasoning for the whole-package guard: if the walk saw no section at
+# all while the config file is not empty, the package was unreadable rather
+# than empty, so nothing is swept this round.
+_undo_orphaned_enforcement() {
+	local id orphans=""
+	if [ "$_SECTIONS_SEEN" = "0" ] && [ -s "$_CONFIG_FILE" ]; then
+		logger -t "OMR-QUOTA" "No quota section loaded while $_CONFIG_FILE is not empty -- skipping the enforcement cleanup this round"
+		return 0
+	fi
+	for id in $(_marker_ids); do
+		case "$_ACTIVE_IDS" in
+			*" $id "*) continue ;;
+		esac
+		orphans="${orphans}${id} "
+	done
+	[ -n "$orphans" ] && _undo_ids $orphans
+	return 0
+}
+
 start_service() {
+	_ACTIVE_IDS=" "
+	_SECTIONS_SEEN=0
 	config_load omr-quota
 	config_foreach _launch_quota interface
+	config_foreach _launch_global_quota global
+	_undo_orphaned_enforcement
 }
 
 service_triggers() {
 	procd_add_reload_trigger omr-quota network
 }
 
+# reload = stop + start: every daemon is relaunched with its current settings
+# and an interface cut/throttled by a still-enabled quota stays that way (no
+# ifup/ifdown flap on each network or omr-quota config change). Only quotas
+# that are no longer active get their enforcement lifted, in start_service.
 reload_service() {
+	_OMR_QUOTA_RELOADING=1
 	stop
+	_OMR_QUOTA_RELOADING=""
 	start
+}
+
+# A real stop (service stopped or disabled by hand -- not a reload) ends all
+# enforcement. rc.common runs this hook after procd_kill, so the daemons are
+# already gone and can't cut/throttle again behind our back.
+service_stopped() {
+	[ -n "$_OMR_QUOTA_RELOADING" ] && return 0
+	_undo_ids $(_marker_ids)
+	return 0
 }

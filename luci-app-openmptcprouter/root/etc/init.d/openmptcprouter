@@ -61,6 +61,17 @@ omr_set_settings() {
 	local device
 	local ifname
 	local multipath
+	# DHCPv6 companion interfaces (<intf>_6) are managed through their parent
+	case "$1" in *_6)
+		# The companion shares the parent's device and must stay at
+		# multipath=off so it never counts as a WAN of its own (#4329);
+		# earlier wizard versions copied the parent's value there.
+		if [ "$(uci -q get network.$1.proto)" = "dhcpv6" ] && [ -n "$(uci -q get network.${1%_6})" ] && [ "$(uci -q get network.$1.multipath)" != "off" ]; then
+			uci -q set network.$1.multipath=off
+			[ -n "$(uci -q get openmptcprouter.$1)" ] && uci -q set openmptcprouter.$1.multipath=off
+		fi
+		return ;;
+	esac
 	config_get multipath "$1" multipath
 	network_get_device ifname $1
 	[ -z "$ifname" ] && network_get_physdev ifname $1
@@ -81,8 +92,11 @@ omr_set_settings() {
 	if [ "$disable_ipv6" = "1" ]; then
 		uci -q set network.$1.ipv6=0
 	else
-		uci -q set network.$1.ipv6=1
+		# per-interface wizard choice wins when set (openmptcprouter.<intf>.ipv6)
+		ipv6_pref="$(uci -q get openmptcprouter.$1.ipv6)"
+		uci -q set network.$1.ipv6="${ipv6_pref:-1}"
 	fi
+	ipv6="$(uci -q get network.$1.ipv6)"
 
 	[ -z "$addlatency" ] && addlatency=0
 	devicename=$(echo "$device" | cut -d'/' -f3)
@@ -149,8 +163,16 @@ start_service() {
 		}
 	}
 	# remove sysctl already defined in /etc/sysctl.d/
-	sed -i -e '/tcp_fin_timeout/d' -e '/tcp_keepalive_time/d' -e '/nf_conntrack_max/d' -e '/tcp_syn_retries/d' -e '/tcp_fastopen/d' -e '/tcp_retries2/d' -e '/tcp_retries1/d' -e '/ip_default_ttl/d' /etc/sysctl.conf
-	sed -i -e '/tcp_fin_timeout/d' -e '/tcp_keepalive_time/d' -e '/nf_conntrack_max/d' -e '/tcp_syn_retries/d' -e '/tcp_fastopen/d' -e '/tcp_retries2/d' -e '/tcp_retries1/d' -e '/ip_default_ttl/d' /etc/sysctl.d/10-default.conf
+	# This start_service() also runs on every "network" reload trigger (see
+	# service_triggers below), which fires very often on a multi-WAN OMR box.
+	# Only actually rewrite the files (busybox sed -i does a temp-file+rename
+	# on every call) when one of the duplicate keys is really present, instead
+	# of unconditionally touching flash on every single reload.
+	sysctl_dup_pattern='tcp_fin_timeout|tcp_keepalive_time|nf_conntrack_max|tcp_syn_retries|tcp_fastopen|tcp_retries2|tcp_retries1|ip_default_ttl'
+	grep -qE "$sysctl_dup_pattern" /etc/sysctl.conf 2>/dev/null && \
+		sed -i -e '/tcp_fin_timeout/d' -e '/tcp_keepalive_time/d' -e '/nf_conntrack_max/d' -e '/tcp_syn_retries/d' -e '/tcp_fastopen/d' -e '/tcp_retries2/d' -e '/tcp_retries1/d' -e '/ip_default_ttl/d' /etc/sysctl.conf
+	grep -qE "$sysctl_dup_pattern" /etc/sysctl.d/10-default.conf 2>/dev/null && \
+		sed -i -e '/tcp_fin_timeout/d' -e '/tcp_keepalive_time/d' -e '/nf_conntrack_max/d' -e '/tcp_syn_retries/d' -e '/tcp_fastopen/d' -e '/tcp_retries2/d' -e '/tcp_retries1/d' -e '/ip_default_ttl/d' /etc/sysctl.d/10-default.conf
 
 	if [ "$(uci -q get openmptcprouter.settings.country)" = "china" ] && [ -n "$(uci -q get dhcp.@dnsmasq[0].server | grep '127.0.0.1#5353')" ]; then
 		uci -q batch <<-EOF > /dev/null

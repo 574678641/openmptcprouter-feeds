@@ -8,33 +8,616 @@
 OMR_QUOTA_INTERFACE="$1"
 shift
 
+_PERSIST_DIR="${OMR_QUOTA_STATE_DIR:-/etc/omr-quota/state}"
+# Runtime marker directory (tmpfs). This is a cross-package interface, not a
+# private detail: omr-tracker's post-tracking.d/002-error reads the *.cut
+# markers here so a quota cut is not mistaken for a connectivity failure, and
+# it resolves the directory as OMR_QUOTA_RUNTIME_DIR -- so that is the
+# canonical name. OMR_QUOTA_THROTTLE_STATE_DIR stays accepted: it is what the
+# omr-quota unit tests already pass.
+_TSTATE_DIR="${OMR_QUOTA_RUNTIME_DIR:-${OMR_QUOTA_THROTTLE_STATE_DIR:-/tmp/omr-quota}}"
+
+# Enforcement markers, keyed by this daemon's identity ($1 -- the interface
+# name for "interface" sections, "global_<id>" for "global" ones). Besides
+# telling the daemon what it did on the previous loop, they let
+# /etc/init.d/omr-quota lift the enforcement of a quota that has been
+# disabled or removed (OMR_QUOTA_UNDO=1, see _undo_enforcement below):
+# without them a cut interface stayed down, and a throttled one stayed
+# shaped, once its quota was turned off -- nothing else knew about them.
+#   <id>.cut         interfaces this daemon brought down (ifdown)
+#   <id>.throttled   interfaces this daemon shapes with _apply_throttle
+#   <id>.downstream  interfaces shaped by the daily-budget speed limit
+#   <id>.blocklan    the LAN block (firewall lan input DROP) is in effect
+_cut_file="${_TSTATE_DIR}/${OMR_QUOTA_INTERFACE}.cut"
+_tstate_file="${_TSTATE_DIR}/${OMR_QUOTA_INTERFACE}.throttled"
+_downstream_file="${_TSTATE_DIR}/${OMR_QUOTA_INTERFACE}.downstream"
+_blocklan_file="${_TSTATE_DIR}/${OMR_QUOTA_INTERFACE}.blocklan"
+# persistent scope: once exceeded, stay exceeded even across month boundaries
+_persist_file="${_PERSIST_DIR}/${OMR_QUOTA_INTERFACE}.exceeded"
+
+_get_real_interface() {
+	local iface="$1"
+	local real
+	local _cache="${_TSTATE_DIR}/${iface}.realdev"
+	case "$iface" in
+		@*)
+			real="$(ifstatus "$iface" | jsonfilter -q -e '@["device"]')"
+			;;
+		*)
+			real="$(ifstatus "$iface" | jsonfilter -q -e '@.l3_device')"
+			;;
+	esac
+	# ifstatus reports no l3_device while the interface is administratively
+	# down (e.g. cut by this same script for quota enforcement) -- fall back
+	# to the last known device name so vnstat usage lookups keep working.
+	# Without this, a cut interface reads back as 0 bytes used next cycle,
+	# looks like the quota is no longer exceeded, and gets brought back up
+	# only to be cut again next cycle: an infinite up/down flap.
+	if [ -n "$real" ]; then
+		mkdir -p "$_TSTATE_DIR"
+		echo "$real" > "$_cache"
+	elif [ -f "$_cache" ]; then
+		real="$(cat "$_cache")"
+	fi
+	printf '%s' "$real"
+}
+
+_vnstat_usage() {
+	local dev="$1"
+	local json rx_bytes tx_bytes
+	# Third field tells the caller whether both counters were read.  Zero is a
+	# valid value (notably after a month rollover); a missing device, a failed
+	# vnstat query or incomplete JSON is not.  Treating those failures as real
+	# zeroes makes an enforced interface get ifup'ed between polling cycles.
+	[ -z "$dev" ] && { printf '0 0 0'; return; }
+
+	if [ -n "$OMR_QUOTA_BEGINDATE" ]; then
+		# Usage since a date has to come from the *daily* buckets. The obvious
+		# "vnstat -i <dev> -b <date> --json" + traffic.total does not work:
+		# -b only bounds vnstat's list output, while traffic.total is the
+		# interface's whole recorded history, so the date was silently ignored
+		# and a begindate quota counted every byte vnstat had ever seen for
+		# that device. Proved on the bench: -b <first of month>, -b
+		# <yesterday> and -b <a future day> all returned 694221137, while the
+		# daily sums for the same dates were 694221137, 411937225 and 0.
+		# Note vnstat only keeps a limited daily history (DailyDays, 30 by
+		# default), so a begindate older than that counts from the oldest day
+		# still in the database.
+		json="$(vnstat -i "$dev" --json d -b "$OMR_QUOTA_BEGINDATE" 2>/dev/null)" || {
+			printf '0 0 0'; return
+		}
+		# printf in awk rather than print: print applies awk's OFMT/CONVFMT
+		# to a non-integral or very large sum (%.6g), which the numeric check
+		# below would reject; "%.0f" always renders a plain integer. (Busybox
+		# awk on the bench prints these magnitudes as integers either way --
+		# this is belt and braces, not a reproduced failure.)
+		rx_bytes="$(printf '%s' "$json" | jsonfilter -q -e '@.interfaces[0].traffic.day[*].rx' | awk '{s+=$1} END{printf "%.0f", s+0}')"
+		tx_bytes="$(printf '%s' "$json" | jsonfilter -q -e '@.interfaces[0].traffic.day[*].tx' | awk '{s+=$1} END{printf "%.0f", s+0}')"
+	else
+		json="$(vnstat -i "$dev" --json 2>/dev/null)" || {
+			printf '0 0 0'; return
+		}
+		rx_bytes="$(printf '%s' "$json" | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].rx' | tr -d "\n")"
+		tx_bytes="$(printf '%s' "$json" | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].tx' | tr -d "\n")"
+	fi
+
+	case "$rx_bytes" in ''|*[!0-9]*) printf '0 0 0'; return ;; esac
+	case "$tx_bytes" in ''|*[!0-9]*) printf '0 0 0'; return ;; esac
+	printf '%s %s 1' "$(( rx_bytes / 1024 ))" "$(( tx_bytes / 1024 ))"
+}
+
+# SQM (cake/htb+fq_codel via /usr/lib/sqm) owns the root qdisc of the devices
+# it shapes. Our tbf replaces it, so a device that SQM manages has to be
+# handed over explicitly: stop SQM before shaping (otherwise its state file
+# claims it is running while our tbf is installed, and any "sqm reload" puts
+# cake back on top of us) and start it again after unshaping (otherwise the
+# user's shaper is silently gone once a quota clears, while SQM still reports
+# it active -- the same failure mode as issue #4329, where mptcp's fq default
+# wiped cake). Paths are overridable for the unit tests.
+_SQM_RUN="${OMR_QUOTA_SQM_RUN:-/usr/lib/sqm/run.sh}"
+
+# _sqm_manages <dev>: is this device shaped by SQM (running, or configured)?
+_sqm_manages() {
+	local dev="$1" state_dir sec
+	[ -n "$dev" ] || return 1
+	[ -x "$_SQM_RUN" ] || return 1
+	state_dir="${OMR_QUOTA_SQM_STATE_DIR:-$(. /etc/sqm/sqm.conf 2>/dev/null; echo "${SQM_STATE_DIR:-/var/run/sqm}")}"
+	[ -f "${state_dir}/${dev}.state" ] && return 0
+	for sec in $(uci -q show sqm 2>/dev/null | sed -n "s/^sqm\.\([^.]*\)\.interface='${dev}'\$/\1/p"); do
+		[ "$(uci -q get sqm.${sec}.enabled)" = "1" ] && return 0
+	done
+	return 1
+}
+
+# _shape_device <dev> <dl kbit> <ul kbit> <burst> <latency>: bidirectional
+# shaping, the only way tc can limit what a device *receives*.
+#
+# Egress is a tbf on the device's own root qdisc. Ingress cannot be shaped
+# directly, so all incoming traffic is redirected (u32/mirred) to an IFB
+# device that carries its own tbf -- the standard Linux trick. The IFB name
+# is "ifb-<dev>" with "/" sanitized to "-", since MPTCP sub-interfaces can
+# contain one.
+#
+# Both the throttle action and the daily-budget speed limit go through this:
+# the budget limit used to install the egress tbf only, which on a WAN device
+# limits upload and leaves download untouched. Measured on the bench with a
+# derived 2 Mbit/s limit: upload 1897 kbit/s, download 20003 kbit/s, i.e. a
+# "limit speed using remaining daily volume" that did not slow the direction
+# the volume is actually spent on.
+_shape_device() {
+	local dev="$1" dl_kbit="$2" ul_kbit="$3" burst="$4" latency="$5"
+	local ifb_dev="ifb-$(echo "$dev" | tr '/' '-')"
+	if _sqm_manages "$dev"; then
+		logger -t "OMR-QUOTA" "Taking over the SQM shaper on $dev"
+		"$_SQM_RUN" stop "$dev" >/dev/null 2>&1
+	fi
+	modprobe ifb 2>/dev/null || true
+	if ! ip link show "$ifb_dev" > /dev/null 2>&1; then
+		ip link add name "$ifb_dev" type ifb
+	fi
+	ip link set "$ifb_dev" up
+	tc qdisc replace dev "$dev" root tbf rate "${ul_kbit}kbit" burst "$burst" latency "$latency"
+	tc qdisc add dev "$dev" handle ffff: ingress 2>/dev/null || true
+	tc filter del dev "$dev" parent ffff: 2>/dev/null || true
+	tc filter add dev "$dev" parent ffff: protocol all u32 match u32 0 0 \
+		action mirred egress redirect dev "$ifb_dev"
+	tc qdisc replace dev "$ifb_dev" root tbf rate "${dl_kbit}kbit" burst "$burst" latency "$latency"
+}
+
+# _unshape_device <dev>: undo _shape_device, including the IFB device, and
+# give the device back to SQM if that is what shapes it normally
+_unshape_device() {
+	local dev="$1"
+	local ifb_dev="ifb-$(echo "$dev" | tr '/' '-')"
+	tc qdisc del dev "$dev" root 2>/dev/null || true
+	tc qdisc del dev "$dev" ingress 2>/dev/null || true
+	if ip link show "$ifb_dev" > /dev/null 2>&1; then
+		tc qdisc del dev "$ifb_dev" root 2>/dev/null || true
+		ip link del "$ifb_dev" 2>/dev/null || true
+	fi
+	if _sqm_manages "$dev"; then
+		logger -t "OMR-QUOTA" "Restoring the SQM shaper on $dev"
+		"$_SQM_RUN" start "$dev" >/dev/null 2>&1
+	fi
+}
+
+_apply_throttle() {
+	_shape_device "$1" \
+		"$(( ${OMR_QUOTA_THROTTLE_DL:-1} * 1000 ))" \
+		"$(( ${OMR_QUOTA_THROTTLE_UL:-1} * 1000 ))" \
+		32768 400ms
+}
+
+_remove_throttle() {
+	_unshape_device "$1"
+}
+
+# _wait_iface_up <iface> [seconds]: after ifup, wait (bounded) for netifd to
+# report the interface up. A throttle's egress tbf must be installed *after*
+# this: the ifup hotplug ("mptcp reload <dev>") replaces the device's root
+# qdisc, so a tbf installed while the interface was still down was wiped a
+# second later and the upload ran unshaped until the next poll interval.
+# `command sleep` deliberately bypasses any shell-function override of sleep
+# (the unit tests use one to stop the main loop after one iteration).
+_wait_iface_up() {
+	local iface="$1" n=0 max="${2:-10}"
+	while [ "$n" -lt "$max" ]; do
+		[ "$(ifstatus "$iface" | jsonfilter -q -e '@.up')" = "true" ] && return 0
+		command sleep 1
+		n=$((n + 1))
+	done
+	return 1
+}
+
+_apply_downstream_limit() {
+	local rate_kbit="$1"
+	local iface dev list prev
+	[ -z "$rate_kbit" ] && return
+	list="${OMR_QUOTA_DOWN_INTERFACES:-${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}}"
+	# down_interfaces can be edited while a daily-budget limit is active (the
+	# daemon is relaunched with the new list). Drop the shaper from the
+	# interfaces that are no longer targets first, or their tbf stays in
+	# place for good: the marker written below is the only record of what was
+	# shaped, and it is about to be overwritten with the new list.
+	if [ -f "$_downstream_file" ]; then
+		prev="$(cat "$_downstream_file")"
+		for iface in $prev; do
+			case " $list " in *" $iface "*) continue ;; esac
+			dev="$(_get_real_interface "$iface")"
+			[ -n "$dev" ] && _unshape_device "$dev"
+		done
+	fi
+	mkdir -p "$_TSTATE_DIR"
+	printf '%s' "$list" > "$_downstream_file"
+	for iface in $list; do
+		dev="$(_get_real_interface "$iface")"
+		# the derived rate is a volume budget, so it caps both directions
+		[ -n "$dev" ] && _shape_device "$dev" "$rate_kbit" "$rate_kbit" 5k 200ms
+	done
+}
+
+_remove_downstream_limit() {
+	local iface dev list
+	[ -f "$_downstream_file" ] || return
+	# what was actually shaped, not what the current environment says: the
+	# two differ exactly when down_interfaces changed under a live limit
+	list="$(cat "$_downstream_file")"
+	for iface in ${list:-${OMR_QUOTA_DOWN_INTERFACES:-${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}}}; do
+		dev="$(_get_real_interface "$iface")"
+		[ -n "$dev" ] && _unshape_device "$dev"
+	done
+	rm -f "$_downstream_file"
+}
+
+# LAN block. firewall.zone_lan.input=DROP is what keeps LAN clients off the
+# proxies while the quota is cut (every transparent-proxy redirect -- ss,
+# xray, v2ray, hysteria -- lands in the router's own input path), but on
+# its own it also cuts LuCI, SSH, DNS and DHCP: the admin can no longer
+# even open the quota page to lift the block, and clients lose their leases
+# while it lasts. So the block always comes with ACCEPT rules for the
+# router's own services, which fw4 evaluates before the zone policy. The
+# rules are named UCI sections (idempotent to re-create, removed as a set
+# on unblock); LuCI/SSH ports are read from the live uhttpd/dropbear config
+# with the stock defaults as fallback.
+_LAN_ACCESS_RULES="omr_quota_lan_tcp omr_quota_lan_udp omr_quota_lan_icmp"
+
+# _uci_ports <default> [values...]: print the sorted unique numeric ports
+# found in <values> (bare ports or listen specs like 0.0.0.0:80 / [::]:443),
+# or <default> when none is found.
+_uci_ports() {
+	local dflt="$1" v p out=""
+	shift
+	for v in "$@"; do
+		p="${v##*:}"
+		case "$p" in ""|*[!0-9]*) continue ;; esac
+		out="$out $p"
+	done
+	[ -n "$out" ] || out=" $dflt"
+	printf '%s\n' $out | sort -un | tr '\n' ' ' | sed 's/ $//'
+}
+
+# TCP services LAN clients keep reaching on the router: LuCI (uhttpd),
+# SSH (dropbear) and DNS. Each service falls back to its own default.
+_lan_access_tcp_ports() {
+	_uci_ports "" \
+		$(_uci_ports "80 443" $(uci -q get uhttpd.main.listen_http) $(uci -q get uhttpd.main.listen_https)) \
+		$(_uci_ports "22" $(uci -q show dropbear 2>/dev/null | sed -n "s/^dropbear\.[^.]*\.Port='*\([0-9]*\)'*$/\1/p")) \
+		53
+}
+
+_add_lan_access_rules() {
+	local tcp_ports
+	tcp_ports="$(_lan_access_tcp_ports)"
+	uci -q set firewall.omr_quota_lan_tcp=rule
+	uci -q set firewall.omr_quota_lan_tcp.name='OMR quota: keep router access (LuCI, SSH, DNS)'
+	uci -q set firewall.omr_quota_lan_tcp.src='lan'
+	uci -q set firewall.omr_quota_lan_tcp.proto='tcp'
+	uci -q set firewall.omr_quota_lan_tcp.dest_port="$tcp_ports"
+	uci -q set firewall.omr_quota_lan_tcp.target='ACCEPT'
+	# DNS, DHCPv4 server (67), DHCPv6 server (547)
+	uci -q set firewall.omr_quota_lan_udp=rule
+	uci -q set firewall.omr_quota_lan_udp.name='OMR quota: keep router access (DNS, DHCP)'
+	uci -q set firewall.omr_quota_lan_udp.src='lan'
+	uci -q set firewall.omr_quota_lan_udp.proto='udp'
+	uci -q set firewall.omr_quota_lan_udp.dest_port='53 67 547'
+	uci -q set firewall.omr_quota_lan_udp.target='ACCEPT'
+	# ping + IPv6 neighbour discovery (fw4 expands 'icmp' to icmp and ipv6-icmp)
+	uci -q set firewall.omr_quota_lan_icmp=rule
+	uci -q set firewall.omr_quota_lan_icmp.name='OMR quota: keep router access (ICMP)'
+	uci -q set firewall.omr_quota_lan_icmp.src='lan'
+	uci -q set firewall.omr_quota_lan_icmp.proto='icmp'
+	uci -q set firewall.omr_quota_lan_icmp.target='ACCEPT'
+}
+
+_del_lan_access_rules() {
+	local r
+	for r in $_LAN_ACCESS_RULES; do
+		uci -q delete "firewall.$r"
+	done
+}
+
+_block_lan() {
+	[ "${OMR_QUOTA_BLOCK_LAN:-0}" = "1" ] || return
+	# Already blocked *with* the router-access rules in place. An input=DROP
+	# left by an older daemon without them still gets the rules added.
+	[ "$(uci -q get firewall.zone_lan.input)" = "DROP" ] && \
+		[ -n "$(uci -q get firewall.omr_quota_lan_tcp)" ] && return
+
+	logger -t "OMR-QUOTA" "Block LAN interfaces: $1"
+	uci -q set firewall.zone_lan.input='DROP'
+	_add_lan_access_rules
+	uci -q commit firewall
+	mkdir -p "$_TSTATE_DIR"
+	touch "$_blocklan_file"
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+_unblock_lan() {
+	[ "${OMR_QUOTA_BLOCK_LAN:-0}" = "1" ] || return
+	# Nothing to lift: input already ACCEPT and no leftover access rules
+	# (e.g. input restored by hand while the rules were still there).
+	if [ "$(uci -q get firewall.zone_lan.input)" = "ACCEPT" ] && \
+	   [ -z "$(uci -q get firewall.omr_quota_lan_tcp)" ]; then
+		rm -f "$_blocklan_file"
+		return
+	fi
+
+	logger -t "OMR-QUOTA" "Unblock LAN interfaces"
+	uci -q set firewall.zone_lan.input='ACCEPT'
+	_del_lan_access_rules
+	uci -q commit firewall
+	rm -f "$_blocklan_file"
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+# _undo_enforcement: revert everything this daemon identity currently
+# enforces, as recorded by its markers, then drop the markers. Run by
+# /etc/init.d/omr-quota (OMR_QUOTA_UNDO=1) once the daemon is gone, for a
+# quota that is disabled or removed and when the service is stopped for
+# good -- never on a plain reload, where the relaunched daemon carries on
+# and an interface it cut must stay down (no ifup/ifdown flap).
+_undo_enforcement() {
+	local iface dev list undone=0
+	if [ -f "$_tstate_file" ]; then
+		list="$(cat "$_tstate_file")"
+		for iface in ${list:-${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}}; do
+			dev="$(_get_real_interface "$iface")"
+			[ -n "$dev" ] && _remove_throttle "$dev"
+		done
+		rm -f "$_tstate_file"
+		undone=1
+	fi
+	if [ -f "$_downstream_file" ]; then
+		list="$(cat "$_downstream_file")"
+		for iface in ${list:-${OMR_QUOTA_DOWN_INTERFACES:-${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}}}; do
+			dev="$(_get_real_interface "$iface")"
+			[ -n "$dev" ] && _unshape_device "$dev"
+		done
+		rm -f "$_downstream_file"
+		undone=1
+	fi
+	if [ -f "$_blocklan_file" ]; then
+		OMR_QUOTA_BLOCK_LAN=1
+		_unblock_lan
+		rm -f "$_blocklan_file"
+		undone=1
+	fi
+	if [ -f "$_cut_file" ]; then
+		list="$(cat "$_cut_file")"
+		for iface in ${list:-${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}}; do
+			[ "$(ifstatus "$iface" | jsonfilter -q -e '@.up')" = "true" ] || ifup $iface
+		done
+		rm -f "$_cut_file"
+		undone=1
+	fi
+	[ "$undone" = "1" ] && logger -t "OMR-QUOTA" "Quota enforcement for $OMR_QUOTA_INTERFACE lifted"
+	return 0
+}
+
+if [ "${OMR_QUOTA_UNDO:-0}" = "1" ]; then
+	_undo_enforcement
+	exit 0
+fi
+
+_calculate_budget_limit() {
+	local tt="$1"
+	local now today midnight end_ts today_ts rd rv dv mm seconds_left percent threshold ci
+
+	[ -n "$OMR_QUOTA_TT" ] && [ "$OMR_QUOTA_TT" -gt 0 ] || return
+	[ -n "$OMR_QUOTA_ENDDATE" ] || return
+
+	percent=$(( tt * 100 / OMR_QUOTA_TT ))
+	threshold="${OMR_QUOTA_PERCENT:-80}"
+	[ "$percent" -gt "$threshold" ] || return
+
+	end_ts="$(date -d "$OMR_QUOTA_ENDDATE" +%s 2>/dev/null)" || return
+	today_ts="$(date -d "00:00" +%s 2>/dev/null)" || return
+	rd=$(( (end_ts - today_ts) / 86400 + 1 ))
+	[ "$rd" -gt 0 ] || rd=1
+
+	rv=$(( OMR_QUOTA_TT - tt ))
+	[ "$rv" -lt 0 ] && rv=0
+	dv=$(( rv / rd ))
+
+	now="$(date +%s)"
+	today="$(date +%F)"
+	midnight="$(date -d "$today 0" +%s 2>/dev/null)" || return
+	mm=$(( (now - midnight) / 60 ))
+	[ "$mm" -lt 0 ] && mm=0
+	[ "$mm" -ge 1439 ] && mm=1439
+
+	if [ "${OMR_QUOTA_METHOD:-0}" = "1" ]; then
+		# The checkpoint (last_tt) has to survive at least one poll: the main
+		# loop measures "usage since the checkpoint" *after* this function
+		# runs, so a calculation_interval at or below the poll interval moves
+		# the checkpoint to the current usage on every single iteration, the
+		# measured growth is always 0 and the budget can never be exceeded --
+		# method 1 is silently inert. Seen on the bench with
+		# calculation_interval=1 and interval=5: two 150 KB traffic bursts
+		# against a 2 KiB budget produced no cut in five minutes. Clamp to
+		# twice the poll interval and say so once.
+		ci="${OMR_QUOTA_CALCULATION_INTERVAL:-120}"
+		if [ "$ci" -le "${OMR_QUOTA_INTERVAL:-60}" ]; then
+			if [ "${_budget_ci_warned:-0}" != "1" ]; then
+				logger -t "OMR-QUOTA" "calculation_interval (${ci}s) must be longer than the poll interval (${OMR_QUOTA_INTERVAL:-60}s) to measure a daily budget: using $(( ${OMR_QUOTA_INTERVAL:-60} * 2 ))s"
+				_budget_ci_warned=1
+			fi
+			ci=$(( ${OMR_QUOTA_INTERVAL:-60} * 2 ))
+		fi
+		if [ "$(( now - last_calculation ))" -gt "$ci" ]; then
+			cv=$(( dv / (1440 - mm + 1) ))
+			last_tt=$tt
+			last_calculation=$now
+		fi
+	elif [ "${OMR_QUOTA_METHOD:-0}" = "2" ]; then
+		seconds_left=$(( (1440 - mm) * 60 ))
+		[ "$seconds_left" -le 0 ] && seconds_left=60
+		cb=$(( dv * 8 / seconds_left ))
+		[ "$cb" -lt 1 ] && cb=1
+	fi
+}
+
+# Baseline reset -- reset_exceeded (UCI/ubus) only clears the *persistent*
+# scope marker, which is irrelevant for exceedance_scope=month_only: that
+# scope recomputes "exceeded" from live vnstat totals every loop, so there's
+# nothing else to clear and quota enforcement stays in effect until the
+# calendar month rolls over. Recording a baseline (usage-so-far, subtracted
+# from every future reading) makes reset_exceeded actually un-exceed a
+# month_only quota immediately, without waiting for vnstat's own month
+# bucket to roll over. Tagged with the calendar month it was taken in, so a
+# real month rollover (vnstat's own bucket resetting to 0) isn't permanently
+# masked by a stale baseline from a previous month.
+_baseline_file="${_PERSIST_DIR}/${OMR_QUOTA_INTERFACE}.baseline"
+
+_read_baseline() {
+	local tag rx0 tx0
+	[ -f "$_baseline_file" ] || { printf '0 0'; return; }
+	read -r tag rx0 tx0 < "$_baseline_file"
+	if [ "$tag" != "$(date +%Y-%m)" ]; then
+		rm -f "$_baseline_file"
+		printf '0 0'
+	else
+		printf '%s %s' "${rx0:-0}" "${tx0:-0}"
+	fi
+}
+
+if [ "${OMR_QUOTA_RESET_BASELINE:-0}" = "1" ]; then
+	_rx0=0; _tx0=0
+	for iface in ${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}; do
+		real_iface="$(_get_real_interface "$iface")"
+		usage="$(_vnstat_usage "$real_iface")"
+		_rx0=$(( _rx0 + $(printf '%s' "$usage" | awk '{print $1}') ))
+		_tx0=$(( _tx0 + $(printf '%s' "$usage" | awk '{print $2}') ))
+	done
+	mkdir -p "$_PERSIST_DIR"
+	printf '%s %s %s' "$(date +%Y-%m)" "$_rx0" "$_tx0" > "$_baseline_file"
+	logger -t "OMR-QUOTA" "Reset quota baseline for $OMR_QUOTA_INTERFACE (rx=${_rx0}KB tx=${_tx0}KB)"
+fi
+
+_prev_exceeded=-1
+last_calculation=0
+last_tt=0
+
 # main loop
 while true; do
-	OMR_QUOTA_REAL_INTERFACE="$(ifstatus $OMR_QUOTA_INTERFACE | jsonfilter -e '@.l3_device')"
-	[ -n "$(echo $OMR_QUOTA_INTERFACE | grep '@')" ] && OMR_QUOTA_REAL_INTERFACE=$(ifstatus "$1" | jsonfilter -q -e '@["device"]')
-	rx_bits=`vnstat -i $OMR_QUOTA_REAL_INTERFACE --json | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].rx' | tr -d "\n"`
-	tx_bits=`vnstat -i $OMR_QUOTA_REAL_INTERFACE --json | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].tx' | tr -d "\n"`
-	rx=$((rx_bits/1024))
-	tx=$((tx_bits/1024))
-	tt=$((rx + tx))
+	# The interfaces a quota meters are also the interfaces it enforces on:
+	# a per-interface quota's list is just itself, a global quota's list is
+	# every interface it combines -- so exceeding it cuts/throttles all of them.
+	target_interfaces="${OMR_QUOTA_INTERFACES:-$OMR_QUOTA_INTERFACE}"
+
+	rx=0
+	tx=0
+	usage_complete=1
+	for iface in $target_interfaces; do
+		real_iface="$(_get_real_interface "$iface")"
+		usage="$(_vnstat_usage "$real_iface")"
+		rxi="$(printf '%s' "$usage" | awk '{print $1}')"
+		txi="$(printf '%s' "$usage" | awk '{print $2}')"
+		[ "$(printf '%s' "$usage" | awk '{print $3}')" = "1" ] || usage_complete=0
+		rx=$(( rx + ${rxi:-0} ))
+		tx=$(( tx + ${txi:-0} ))
+	done
+	_baseline="$(_read_baseline)"
+	rx=$(( rx - $(printf '%s' "$_baseline" | awk '{print $1}') ))
+	tx=$(( tx - $(printf '%s' "$_baseline" | awk '{print $2}') ))
+	[ "$rx" -lt 0 ] && rx=0
+	[ "$tx" -lt 0 ] && tx=0
+	tt=$(( rx + tx ))
+	cb=""
+
+	exceeded=0
+	reason=""
 	if [ -n "$OMR_QUOTA_RX" ] && [ "$OMR_QUOTA_RX" -gt 0 ] && [ -n "$rx" ] && [ "$OMR_QUOTA_RX" -le "$rx" ]; then
-		if [ "$(ifstatus $OMR_QUOTA_INTERFACE | jsonfilter -e '@.up')" = "true" ]; then
-			logger -t "OMR-QUOTA" "Set interface $OMR_QUOTA_INTERFACE down, RX quota reached"
-			ifdown $OMR_QUOTA_INTERFACE
-		fi
+		exceeded=1; reason="RX quota"
 	elif [ -n "$OMR_QUOTA_TX" ] && [ "$OMR_QUOTA_TX" -gt 0 ] && [ -n "$tx" ] && [ "$OMR_QUOTA_TX" -le "$tx" ]; then
-		if [ "$(ifstatus $OMR_QUOTA_INTERFACE | jsonfilter -e '@.up')" = "true" ]; then
-			logger -t "OMR-QUOTA" "Set interface $OMR_QUOTA_INTERFACE down, TX quota reached"
-			ifdown $OMR_QUOTA_INTERFACE
-		fi
+		exceeded=1; reason="TX quota"
 	elif [ -n "$OMR_QUOTA_TT" ] && [ "$OMR_QUOTA_TT" -gt 0 ] && [ -n "$tt" ] && [ "$OMR_QUOTA_TT" -le "$tt" ]; then
-		if [ "$(ifstatus $OMR_QUOTA_INTERFACE | jsonfilter -e '@.up')" = "true" ]; then
-			logger -t "OMR-QUOTA" "Set interface $OMR_QUOTA_INTERFACE down, RX+TX quota reached"
-			ifdown $OMR_QUOTA_INTERFACE
-		fi
-	elif [ "$(ifstatus $OMR_QUOTA_INTERFACE | jsonfilter -e '@.up')" = "false" ]; then
-		logger -t "OMR-QUOTA" "Set interface $OMR_QUOTA_INTERFACE up"
-		ifup $OMR_QUOTA_INTERFACE
+		exceeded=1; reason="RX+TX quota"
 	fi
-	sleep "$OMR_QUOTA_INTERVAL"
+	# Once enforcement is active, an unreadable/incomplete vnstat sample must
+	# not be interpreted as a usage reset. Keep the current cut/throttle until
+	# a complete sample proves that the quota is no longer exceeded.
+	if [ "$usage_complete" != "1" ] && { [ "$_prev_exceeded" = "1" ] || [ -f "$_cut_file" ] || [ -f "$_tstate_file" ]; }; then
+		exceeded=1
+		[ -z "$reason" ] && reason="usage counters temporarily unavailable"
+	fi
+
+	_calculate_budget_limit "$tt"
+	if [ -n "$cv" ] && [ "$(( tt - last_tt ))" -gt "$cv" ]; then
+		exceeded=1; reason="daily budget"
+	fi
+
+	# For persistent scope: once exceeded, stay exceeded even across month boundaries
+	if [ "${OMR_QUOTA_SCOPE:-month_only}" = "persistent" ] && [ -f "$_persist_file" ]; then
+		exceeded=1
+		[ -z "$reason" ] && reason="persistent exceeded state"
+	fi
+
+	if [ -n "$cb" ]; then
+		_apply_downstream_limit "$cb"
+	else
+		_remove_downstream_limit
+	fi
+
+	if [ "$exceeded" = "1" ]; then
+		# Record persistent exceeded state on first detection
+		if [ "${OMR_QUOTA_SCOPE:-month_only}" = "persistent" ] && [ ! -f "$_persist_file" ]; then
+			mkdir -p "$_PERSIST_DIR"
+			touch "$_persist_file"
+		fi
+
+		if [ "${OMR_QUOTA_ACTION:-cut}" = "throttle" ]; then
+			[ "$_prev_exceeded" != "1" ] && \
+				logger -t "OMR-QUOTA" "Throttling $target_interfaces to ${OMR_QUOTA_THROTTLE_DL:-1}/${OMR_QUOTA_THROTTLE_UL:-1} Mbps: $reason reached"
+			mkdir -p "$_TSTATE_DIR"
+			printf '%s' "$target_interfaces" > "$_tstate_file"
+			for iface in $target_interfaces; do
+				# Keep the interface up while throttled -- and bring it up
+				# *before* shaping it, see _wait_iface_up.
+				iface_up="$(ifstatus "$iface" | jsonfilter -e '@.up')"
+				if [ "$iface_up" = "false" ]; then
+					ifup $iface
+					_wait_iface_up "$iface"
+				fi
+				real_iface="$(_get_real_interface "$iface")"
+				[ -n "$real_iface" ] && _apply_throttle "$real_iface"
+			done
+			# a cut quota switched to throttle: its interfaces are up again
+			rm -f "$_cut_file"
+		else
+			# cut: bring the interface(s) down
+			_block_lan "$reason reached"
+			mkdir -p "$_TSTATE_DIR"
+			printf '%s' "$target_interfaces" > "$_cut_file"
+			for iface in $target_interfaces; do
+				iface_up="$(ifstatus "$iface" | jsonfilter -e '@.up')"
+				if [ "$iface_up" = "true" ]; then
+					logger -t "OMR-QUOTA" "Set interface $iface down: $reason reached"
+					ifdown $iface
+				fi
+			done
+		fi
+	else
+		# Quota not exceeded — remove any throttle that was active
+		if [ -f "$_tstate_file" ]; then
+			logger -t "OMR-QUOTA" "Removing throttle from $target_interfaces"
+			for iface in $target_interfaces; do
+				real_iface="$(_get_real_interface "$iface")"
+				[ -n "$real_iface" ] && _remove_throttle "$real_iface"
+			done
+			rm -f "$_tstate_file"
+		fi
+		for iface in $target_interfaces; do
+			iface_up="$(ifstatus "$iface" | jsonfilter -e '@.up')"
+			if [ "$iface_up" = "false" ]; then
+				logger -t "OMR-QUOTA" "Set interface $iface up"
+				ifup $iface
+			fi
+		done
+		rm -f "$_cut_file"
+		_unblock_lan
+	fi
+
+	_prev_exceeded=$exceeded
+	sleep "${OMR_QUOTA_INTERVAL:-60}"
 done

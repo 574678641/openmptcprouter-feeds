@@ -1,0 +1,342 @@
+#!/bin/sh
+# rpcd plugin for omr-quota management
+#
+# Methods:
+#   get_quota       - read quota config for one interface or all
+#   set_quota       - write quota config for one interface
+#   get_status      - read current month usage and exceeded/throttled/cut state
+#   reset_exceeded  - clear the persistent exceeded state for one interface
+#
+# Each entry is either an "interface" section (single interface, its own
+# traffic) or a "global" section (several interfaces combined, all of them
+# cut/throttled together). set_quota's "type" defaults to "interface" for
+# backward compatibility; "interfaces" is required when type=global.
+#
+# Usage examples:
+#   ubus call quota get_quota    '{}'
+#   ubus call quota get_quota    '{"interface":"wan1"}'
+#   ubus call quota set_quota    '{"interface":"wan1","enabled":"1","rxquota":"400000","exceedance_action":"throttle","throttle_dl":"5","throttle_ul":"2","exceedance_scope":"persistent"}'
+#   ubus call quota set_quota    '{"interface":"global1","type":"global","interfaces":"wan1 wan2","enabled":"1","ttquota":"900000"}'
+#   ubus call quota get_status   '{"interface":"wan1"}'
+#   ubus call quota reset_exceeded '{"interface":"wan1"}'
+
+_PERSIST_DIR="/etc/omr-quota/state"
+_TSTATE_DIR="/tmp/omr-quota"
+
+_json_str() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+_safe_iface() {
+	printf '%s' "$1" | sed 's/[^a-zA-Z0-9_@-]//g'
+}
+
+_get_real_iface() {
+	local iface="$1" real
+	case "$iface" in
+		@*)
+			real=$(ifstatus "$iface" 2>/dev/null | jsonfilter -q -e '@["device"]')
+			;;
+		*)
+			real=$(ifstatus "$iface" 2>/dev/null | jsonfilter -q -e '@.l3_device')
+			;;
+	esac
+	# No l3_device while the interface is administratively down -- which is
+	# exactly the state a "cut" quota leaves it in. Fall back to the device
+	# the daemon cached while it was up (the <iface>.realdev file
+	# _get_real_interface in /bin/omr-quota maintains), then to netifd's
+	# configured device. Without this get_status read 0 bytes for a cut
+	# interface and reported the very quota it had just enforced as not
+	# exceeded (rx_kib 0, exceeded false) for as long as it stayed cut.
+	[ -z "$real" ] && [ -f "${_TSTATE_DIR}/${iface}.realdev" ] && real=$(cat "${_TSTATE_DIR}/${iface}.realdev")
+	[ -z "$real" ] && real=$(ifstatus "$iface" 2>/dev/null | jsonfilter -q -e '@.device')
+	printf '%s' "$real"
+}
+
+_vnstat_month() {
+	local dev="$1"
+	[ -z "$dev" ] && { printf '0 0'; return; }
+	local js rx tx
+	if [ -n "$2" ]; then
+		# Daily buckets, not traffic.total: -b does not bound traffic.total,
+		# which is the interface's whole recorded history -- see the same
+		# lookup in /bin/omr-quota (_vnstat_usage) for the full explanation.
+		js=$(vnstat -i "$dev" --json d -b "$2" 2>/dev/null)
+		rx=$(printf '%s' "$js" | jsonfilter -q -e '@.interfaces[0].traffic.day[*].rx' | awk '{s+=$1} END{printf "%.0f", s+0}')
+		tx=$(printf '%s' "$js" | jsonfilter -q -e '@.interfaces[0].traffic.day[*].tx' | awk '{s+=$1} END{printf "%.0f", s+0}')
+	else
+		js=$(vnstat -i "$dev" --json 2>/dev/null)
+		rx=$(printf '%s' "$js" | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].rx' | tr -d '\n')
+		tx=$(printf '%s' "$js" | jsonfilter -q -e '@.interfaces[0].traffic.month[-1].tx' | tr -d '\n')
+	fi
+	printf '%s %s' "${rx:-0}" "${tx:-0}"
+}
+
+# uci section type ("interface" or "global"), empty if the section doesn't exist
+_section_type() {
+	uci -q get "omr-quota.${1}" 2>/dev/null
+}
+
+# The identity omr-quota's daemon uses for its state files: the interface
+# name itself for "interface" sections, "global_<id>" for "global" sections
+# (see /etc/init.d/omr-quota).
+_state_id() {
+	local iface="$1" type="$2"
+	if [ "$type" = "global" ]; then
+		printf 'global_%s' "$iface"
+	else
+		printf '%s' "$iface"
+	fi
+}
+
+_read_baseline() {
+	local state_id="$1"
+	local tag rx0 tx0 file="${_PERSIST_DIR}/${state_id}.baseline"
+	[ -f "$file" ] || { printf '0 0'; return; }
+	read -r tag rx0 tx0 < "$file"
+	if [ "$tag" != "$(date +%Y-%m)" ]; then
+		rm -f "$file"
+		printf '0 0'
+	else
+		printf '%s %s' "${rx0:-0}" "${tx0:-0}"
+	fi
+}
+
+_all_sections() {
+	uci -q show omr-quota 2>/dev/null | \
+		sed -n 's/^omr-quota\.\([^.]*\)=\(interface\|global\)$/\1/p'
+}
+
+_quota_config_json() {
+	local iface="$1"
+	local type=$(_section_type "$iface")
+	local enabled txquota rxquota ttquota interval action dl ul scope
+	local interfaces down_interfaces begindate enddate method percent calculation_interval block_lan
+	enabled=$(uci -q get "omr-quota.${iface}.enabled"          2>/dev/null); enabled=${enabled:-0}
+	txquota=$(uci -q get "omr-quota.${iface}.txquota"          2>/dev/null); txquota=${txquota:-0}
+	rxquota=$(uci -q get "omr-quota.${iface}.rxquota"          2>/dev/null); rxquota=${rxquota:-0}
+	ttquota=$(uci -q get "omr-quota.${iface}.ttquota"          2>/dev/null); ttquota=${ttquota:-0}
+	interval=$(uci -q get "omr-quota.${iface}.interval"        2>/dev/null); interval=${interval:-60}
+	interfaces=$(uci -q get "omr-quota.${iface}.interfaces"   2>/dev/null)
+	if [ "$type" = "global" ]; then
+		interfaces=${interfaces:-}
+	else
+		interfaces="$iface"
+	fi
+	down_interfaces=$(uci -q get "omr-quota.${iface}.down_interfaces" 2>/dev/null); down_interfaces=${down_interfaces:-$interfaces}
+	begindate=$(uci -q get "omr-quota.${iface}.begindate"      2>/dev/null)
+	enddate=$(uci -q get "omr-quota.${iface}.enddate"          2>/dev/null)
+	method=$(uci -q get "omr-quota.${iface}.method"            2>/dev/null); method=${method:-0}
+	percent=$(uci -q get "omr-quota.${iface}.percent"          2>/dev/null); percent=${percent:-80}
+	calculation_interval=$(uci -q get "omr-quota.${iface}.calculation_interval" 2>/dev/null); calculation_interval=${calculation_interval:-120}
+	block_lan=$(uci -q get "omr-quota.${iface}.block_lan"      2>/dev/null); block_lan=${block_lan:-0}
+	action=$(uci -q get "omr-quota.${iface}.exceedance_action" 2>/dev/null); action=${action:-cut}
+	dl=$(uci -q get "omr-quota.${iface}.throttle_dl"           2>/dev/null); dl=${dl:-1}
+	ul=$(uci -q get "omr-quota.${iface}.throttle_ul"           2>/dev/null); ul=${ul:-1}
+	scope=$(uci -q get "omr-quota.${iface}.exceedance_scope"   2>/dev/null); scope=${scope:-month_only}
+	printf '{"name":"%s","type":"%s","enabled":"%s","txquota":%s,"rxquota":%s,"ttquota":%s,"interval":%s,"interfaces":"%s","down_interfaces":"%s","begindate":"%s","enddate":"%s","method":%s,"percent":%s,"calculation_interval":%s,"block_lan":"%s","exceedance_action":"%s","throttle_dl":%s,"throttle_ul":%s,"exceedance_scope":"%s"}' \
+		"$(_json_str "$iface")" "$(_json_str "$type")" "$(_json_str "$enabled")" \
+		"$txquota" "$rxquota" "$ttquota" "$interval" \
+		"$(_json_str "$interfaces")" "$(_json_str "$down_interfaces")" \
+		"$(_json_str "$begindate")" "$(_json_str "$enddate")" \
+		"$method" "$percent" "$calculation_interval" "$(_json_str "$block_lan")" \
+		"$(_json_str "$action")" "$dl" "$ul" \
+		"$(_json_str "$scope")"
+}
+
+_quota_status_json() {
+	local iface="$1"
+	local type=$(_section_type "$iface")
+	local state_id=$(_state_id "$iface" "$type")
+	local enabled txquota rxquota ttquota action scope
+	local begindate interfaces
+	enabled=$(uci -q get "omr-quota.${iface}.enabled"          2>/dev/null); enabled=${enabled:-0}
+	txquota=$(uci -q get "omr-quota.${iface}.txquota"          2>/dev/null); txquota=${txquota:-0}
+	rxquota=$(uci -q get "omr-quota.${iface}.rxquota"          2>/dev/null); rxquota=${rxquota:-0}
+	ttquota=$(uci -q get "omr-quota.${iface}.ttquota"          2>/dev/null); ttquota=${ttquota:-0}
+	begindate=$(uci -q get "omr-quota.${iface}.begindate"      2>/dev/null)
+	interfaces=$(uci -q get "omr-quota.${iface}.interfaces"   2>/dev/null)
+	if [ "$type" = "global" ]; then
+		interfaces=${interfaces:-}
+	else
+		interfaces="$iface"
+	fi
+	action=$(uci -q get "omr-quota.${iface}.exceedance_action" 2>/dev/null); action=${action:-cut}
+	scope=$(uci -q get "omr-quota.${iface}.exceedance_scope"   2>/dev/null); scope=${scope:-month_only}
+
+	# Current month usage from vnstat
+	local metered real_iface usage rx_bytes tx_bytes rx_kib tx_kib tt_kib
+	rx_kib=0
+	tx_kib=0
+	for metered in $interfaces; do
+		real_iface=$(_get_real_iface "$metered")
+		usage=$(_vnstat_month "$real_iface" "$begindate")
+		rx_bytes=$(printf '%s' "$usage" | awk '{print $1}')
+		tx_bytes=$(printf '%s' "$usage" | awk '{print $2}')
+		rx_kib=$(( rx_kib + rx_bytes / 1024 ))
+		tx_kib=$(( tx_kib + tx_bytes / 1024 ))
+	done
+	local baseline rx_base tx_base
+	baseline=$(_read_baseline "$state_id")
+	rx_base=$(printf '%s' "$baseline" | awk '{print $1}')
+	tx_base=$(printf '%s' "$baseline" | awk '{print $2}')
+	rx_kib=$(( rx_kib - ${rx_base:-0} ))
+	tx_kib=$(( tx_kib - ${tx_base:-0} ))
+	[ "$rx_kib" -lt 0 ] && rx_kib=0
+	[ "$tx_kib" -lt 0 ] && tx_kib=0
+	tt_kib=$(( rx_kib + tx_kib ))
+
+	# Exceeded / throttled / cut state (markers kept by the daemon, see
+	# /bin/omr-quota; "cut" = the daemon currently holds the interface(s) down)
+	local exceeded=false throttled=false cut=false
+	[ -f "${_PERSIST_DIR}/${state_id}.exceeded" ] && exceeded=true
+	[ -f "${_TSTATE_DIR}/${state_id}.throttled" ] && throttled=true
+	[ -f "${_TSTATE_DIR}/${state_id}.cut" ] && cut=true
+
+	# Derive exceeded from current data too (covers month_only scope)
+	if [ "$exceeded" = "false" ]; then
+		[ "${rxquota:-0}" -gt 0 ] && [ "$rx_kib" -ge "$rxquota" ] && exceeded=true
+		[ "${txquota:-0}" -gt 0 ] && [ "$tx_kib" -ge "$txquota" ] && exceeded=true
+		[ "${ttquota:-0}" -gt 0 ] && [ "$tt_kib" -ge "$ttquota" ] && exceeded=true
+	fi
+
+	# Usage percentages (0-100, capped; 0 when no quota is configured)
+	local rx_pct=0 tx_pct=0 tt_pct=0
+	if [ "${rxquota:-0}" -gt 0 ]; then
+		rx_pct=$(( rx_kib * 100 / rxquota ))
+		[ "$rx_pct" -gt 100 ] && rx_pct=100
+	fi
+	if [ "${txquota:-0}" -gt 0 ]; then
+		tx_pct=$(( tx_kib * 100 / txquota ))
+		[ "$tx_pct" -gt 100 ] && tx_pct=100
+	fi
+	if [ "${ttquota:-0}" -gt 0 ]; then
+		tt_pct=$(( tt_kib * 100 / ttquota ))
+		[ "$tt_pct" -gt 100 ] && tt_pct=100
+	fi
+
+	printf '{"name":"%s","type":"%s","interfaces":"%s","enabled":"%s","exceeded":%s,"throttled":%s,"cut":%s,"rx_kib":%d,"tx_kib":%d,"tt_kib":%d,"rxquota":%d,"txquota":%d,"ttquota":%d,"rx_pct":%d,"tx_pct":%d,"tt_pct":%d,"exceedance_action":"%s","exceedance_scope":"%s"}' \
+		"$(_json_str "$iface")" "$(_json_str "$type")" "$(_json_str "$interfaces")" "$(_json_str "$enabled")" \
+		"$exceeded" "$throttled" "$cut" \
+		"$rx_kib" "$tx_kib" "$tt_kib" \
+		"$rxquota" "$txquota" "$ttquota" \
+		"$rx_pct" "$tx_pct" "$tt_pct" \
+		"$(_json_str "$action")" "$(_json_str "$scope")"
+}
+
+case "$1" in
+	list)
+		printf '{"get_quota":{"interface":""},"set_quota":{"interface":"","type":"","enabled":"","txquota":"","rxquota":"","ttquota":"","interval":"","interfaces":"","down_interfaces":"","begindate":"","enddate":"","method":"","percent":"","calculation_interval":"","block_lan":"","exceedance_action":"","throttle_dl":"","throttle_ul":"","exceedance_scope":""},"get_status":{"interface":""},"reset_exceeded":{"interface":""}}\n'
+		;;
+
+	call)
+		case "$2" in
+			get_quota)
+				input=$(cat)
+				iface=$(_safe_iface "$(printf '%s' "$input" | jsonfilter -q -e '@.interface')")
+				entries=""
+				if [ -n "$iface" ]; then
+					if [ -z "$(_section_type "$iface")" ]; then
+						printf '{"error":"interface not found in omr-quota config"}\n'
+						exit 1
+					fi
+					entries=$(_quota_config_json "$iface")
+				else
+					for sec in $(_all_sections); do
+						[ -n "$entries" ] && entries="${entries},"
+						entries="${entries}$(_quota_config_json "$sec")"
+					done
+				fi
+				printf '{"interfaces":[%s]}\n' "$entries"
+				;;
+
+			set_quota)
+				input=$(cat)
+				iface=$(_safe_iface "$(printf '%s' "$input" | jsonfilter -q -e '@.interface')")
+				type=$(printf '%s' "$input" | jsonfilter -q -e '@.type')
+				[ -z "$type" ] && type="interface"
+				if [ -z "$iface" ]; then
+					printf '{"error":"missing interface parameter"}\n'
+					exit 1
+				fi
+				if [ "$type" != "interface" ] && [ "$type" != "global" ]; then
+					printf '{"error":"invalid type, expected \\"interface\\" or \\"global\\""}\n'
+					exit 1
+				fi
+				existing_type=$(_section_type "$iface")
+				if [ -z "$existing_type" ]; then
+					uci -q set "omr-quota.${iface}=${type}"
+				elif [ "$existing_type" != "$type" ]; then
+					printf '{"error":"section already exists with a different type"}\n'
+					exit 1
+				fi
+				if [ "$type" = "global" ] && [ -z "$existing_type" ] && \
+				   [ -z "$(printf '%s' "$input" | jsonfilter -q -e '@.interfaces')" ]; then
+					printf '{"error":"interfaces is required for type=global"}\n'
+					uci -q delete "omr-quota.${iface}"
+					exit 1
+				fi
+				# Apply every provided non-empty field
+				for field in enabled txquota rxquota ttquota interval interfaces down_interfaces begindate enddate method percent calculation_interval block_lan exceedance_action throttle_dl throttle_ul exceedance_scope; do
+					val=$(printf '%s' "$input" | jsonfilter -q -e "@.${field}")
+					[ -n "$val" ] && uci -q set "omr-quota.${iface}.${field}=${val}"
+				done
+				uci -q commit omr-quota
+				/etc/init.d/omr-quota reload >/dev/null 2>&1
+				printf '{"result":"ok"}\n'
+				;;
+
+			get_status)
+				input=$(cat)
+				iface=$(_safe_iface "$(printf '%s' "$input" | jsonfilter -q -e '@.interface')")
+				entries=""
+				if [ -n "$iface" ]; then
+					if [ -z "$(_section_type "$iface")" ]; then
+						printf '{"error":"interface not found in omr-quota config"}\n'
+						exit 1
+					fi
+					entries=$(_quota_status_json "$iface")
+				else
+					for sec in $(_all_sections); do
+						[ -n "$entries" ] && entries="${entries},"
+						entries="${entries}$(_quota_status_json "$sec")"
+					done
+				fi
+				printf '{"interfaces":[%s]}\n' "$entries"
+				;;
+
+			reset_exceeded)
+				input=$(cat)
+				iface=$(_safe_iface "$(printf '%s' "$input" | jsonfilter -q -e '@.interface')")
+				if [ -z "$iface" ]; then
+					printf '{"error":"missing interface parameter"}\n'
+					exit 1
+				fi
+				if [ -z "$(_section_type "$iface")" ]; then
+					printf '{"error":"interface not found in omr-quota config"}\n'
+					exit 1
+				fi
+				# Delegate to the init script's reset_exceeded handling (same
+				# path as the UCI-option trigger) so both clear the persistent
+				# marker *and* record a fresh usage baseline -- the latter is
+				# what actually un-exceeds an exceedance_scope=month_only
+				# quota, which has no persistent marker of its own to clear.
+				# The daemon's <id>.throttled marker is deliberately left in
+				# place: the relaunched daemon only tears the tc shaper down
+				# (_remove_throttle) when it finds that marker and the quota
+				# is no longer exceeded. Deleting it here made the reset
+				# "succeed" while the interface silently stayed shaped at the
+				# throttle rate, with get_status reporting throttled=false.
+				uci -q set "omr-quota.${iface}.reset_exceeded=1" 2>/dev/null
+				uci -q commit omr-quota 2>/dev/null
+				/etc/init.d/omr-quota reload >/dev/null 2>&1
+				printf '{"result":"ok"}\n'
+				;;
+
+			*)
+				printf '{"error":"unknown method"}\n'
+				exit 1
+				;;
+		esac
+		;;
+esac

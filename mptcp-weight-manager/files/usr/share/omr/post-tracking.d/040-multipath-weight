@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# Copyright (C) 2025 Yannick Chabanois for Stellar
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+# This script configure weight on all interfaces
+
+
+scheduler="$(uci -q get network.globals.mptcp_scheduler)"
+
+if [ -n "$OMR_TRACKER_INTERFACE" ] && [ -n "$OMR_TRACKER_DEVICE" ] && \
+	{ [ "$scheduler" = "mptcp_bpf_weight.o" ] || [ "$scheduler" = "mptcp_bpf_burstweight.o" ] || [ "$scheduler" = "bpf_weight" ] || [ "$scheduler" = "bpf_burstweight" ]; } && \
+	{ [ "$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath)" = "on" ] || [ "$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath)" = "master" ] || [ "$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath)" = "backup" ]; }; then
+	weight="$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath_weight)"
+	current_weight="$(/usr/sbin/mptcp-scheduler-weight.sh show "${OMR_TRACKER_DEVICE}" 2>/dev/null | sed -n 's/.*weight=\([0-9]*\).*/\1/p' | head -n1)"
+	if [ -n "$weight" ] && [ "$weight" != "$current_weight" ]; then
+		/usr/sbin/mptcp-scheduler-weight.sh set "${OMR_TRACKER_DEVICE}" "$weight" >/dev/null 2>&1
+		if [ "$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath)" = "on" ] || [ "$(uci -q get network."${OMR_TRACKER_INTERFACE}".multipath)" = "master" ]; then
+			uci -q set network."${OMR_TRACKER_INTERFACE}".weight="$weight"
+		else
+			uci -q del network."${OMR_TRACKER_INTERFACE}".weight
+		fi
+		[ -n "$(uci -q changes network)" ] && uci -q commit network
+	fi
+	# Keep the VPS's own weight_remote_id map in sync so the weighting
+	# also holds for traffic the VPS sends (downloads) -- see
+	# openmptcprouter-vps's _set_mptcp_weight_vps for details.
+	# Backgrounded and called unconditionally (not gated on the local
+	# "did it change" check above): the function's own cache makes
+	# repeat, no-op calls cheap, and this also catches the case where
+	# only ip4table (the id) changed, not multipath_weight itself.
+	# network.globals.mptcp_dscp_weight_vps_sync: unset/anything but "0"
+	# means enabled (same shared toggle as 041-multipath-dscp) -- explicit
+	# opt-out for anyone who doesn't want this HTTPS round trip / VPS-side
+	# state at all.
+	if [ "$(uci -q get network.globals.mptcp_dscp_weight_vps_sync)" != "0" ]; then
+		( /etc/init.d/openmptcprouter-vps set_mptcp_weight_vps >/dev/null 2>&1 & )
+	fi
+fi
+
+exit 0

@@ -140,12 +140,31 @@ ss_omr_servers() {
 	config_list_foreach "$1" ip add_ip
 }
 
+# A server section still carrying the shipped placeholder address (or none at
+# all) has never been provisioned: nothing answers there. Such a section must
+# not contribute a redirect port -- with ss_rules.redir_tcp="all" the template
+# round-robins new TCP connections over the port list, so one placeholder
+# entry black-holes its share of them (enabled is not the same as healthy) --
+# nor land in ss_rules_remote_servers, which would punch a bypass hole for an
+# address that is not the proxy. The shipped placeholder is 127.0.0.1;
+# 192.168.1.3 is the one older releases shipped and is still recognised for
+# configs that were never provisioned before an upgrade. Same set the rest of
+# the tree treats as "not configured yet" (omr-schedule 010-services and
+# 021-proxy, omr-tracker 003-up, the openmptcprouter rpcd API).
+ss_server_configured() {
+	case "$(uci -q get shadowsocks-libev.$1.server)" in
+		""|127.0.0.1|::1|192.168.1.3) return 1 ;;
+	esac
+	return 0
+}
+
 ss_rules_cb() {
 	local cfgserver server
 
 	if [ "$cfgtype" = ss_redir ]; then
 		config_get cfgserver "$cfg" server
 		config_get server "$cfgserver" server
+		ss_server_configured "$cfgserver" || return
 		if [ -z "$ss_redir_servers" ]; then
 			ss_redir_servers="$server"
 		else
@@ -166,12 +185,36 @@ ss_redir_ports() {
 	server_redir=$(uci -q get shadowsocks-libev.$1.server)
 	disabled=$(uci -q get shadowsocks-libev.$1.disabled)
 	server_disabled=$(uci -q get shadowsocks-libev.${server_redir}.disabled)
-	if [ "$disabled" != "1" ] && [ "$server_disabled" != "1" ] && [ "$server" = "$server_redir" ]; then
+	mode=$(uci -q get shadowsocks-libev.$1.mode)
+	if [ "$disabled" != "1" ] && [ "$server_disabled" != "1" ] && [ "$server" = "$server_redir" ] \
+		&& ss_server_configured "$server_redir"; then
 		if [ "$port" -lt "$min_ss_redir_ports" ]; then
 			min_ss_redir_ports=$port
 		fi
 		if [ "$port" -gt "$max_ss_redir_ports" ]; then
 			max_ss_redir_ports=$port
+		fi
+		[ "$mode" = "udp_only" ] || ss_redir_tcp_ports="$ss_redir_tcp_ports $port"
+	fi
+}
+
+ss_collect_redir_info() {
+	local cfg="$1"
+	local srv_ip cfgserver disabled srv_disabled
+
+	disabled=$(uci -q get shadowsocks-libev.$cfg.disabled)
+	[ "$disabled" = "1" ] && return
+	cfgserver=$(uci -q get shadowsocks-libev.$cfg.server)
+	srv_disabled=$(uci -q get shadowsocks-libev.${cfgserver}.disabled)
+	[ "$srv_disabled" = "1" ] && return
+	ss_server_configured "$cfgserver" || return
+
+	srv_ip=$(uci -q get shadowsocks-libev.${cfgserver}.server)
+	if [ -n "$srv_ip" ] && [ -z "$(echo "$ss_redir_servers" | grep "$srv_ip")" ]; then
+		if [ -z "$ss_redir_servers" ]; then
+			ss_redir_servers="$srv_ip"
+		else
+			ss_redir_servers="$ss_redir_servers $srv_ip"
 		fi
 	fi
 }
@@ -198,14 +241,14 @@ ss_rules_nft_gen() {
 #	if [ "$ss_rules_redir_tcp_$redir_tcp" = "all" ]; then
 		min_ss_redir_ports="65535"
 		max_ss_redir_ports="0"
+		ss_redir_tcp_ports=""
 		config_load shadowsocks-libev
 		config_foreach ss_redir_ports ss_redir $server
-		if [ "$min_ss_redir_ports" != "$max_ss_redir_ports" ]; then
-			all_ss_redir_ports=$min_ss_redir_ports-$max_ss_redir_ports
-		else
-			all_ss_redir_ports=$min_ss_redir_ports
-		fi
-		local_port_tcp="$all_ss_redir_ports"
+		# The exact list of enabled TCP redir ports, not a min-max range: the
+		# kernel gives a DNAT range to its first free port (no balancing) and a
+		# disabled section in the middle would leave a dead port inside the
+		# range. The template round-robins new connections over the list.
+		local_port_tcp="$(echo $ss_redir_tcp_ports | tr ' ' '\n' | sort -nu | tr '\n' ' ' | sed 's/ *$//')"
 		if [ "$ss_rules_redir_udp_$redir_udp" = "all" ] || [ "$ss_rules_redir_udp_$redir_udp" = "hi1" ]; then
 			local_port_udp="$min_ss_redir_ports"
 		fi
@@ -280,10 +323,13 @@ ss_rules_nft_reset() {
 
 ss_rules() {
 	config_load shadowsocks-libev
+	config_foreach ss_collect_redir_info ss_redir
+	if [ -n "$(uci show openmptcprouter)" ]; then
+		config_load openmptcprouter
+		config_foreach ss_omr_servers server
+		config_load shadowsocks-libev
+	fi
 	config_foreach ss_rules_nft_gen ss_rules
-	#if ! ss_rules_nft_gen; then
-	#	ss_rules_nft_reset
-	#fi
 }
 
 rules_up() {
@@ -292,6 +338,8 @@ rules_up() {
 			mv -f "$f" "$(echo "$f" | sed 's/.down//g')"
 		done
 		fw4 -q reload
+	elif [ ! -f "$ssrules_nft" ]; then
+		ss_rules
 	fi
 }
 
@@ -331,7 +379,9 @@ start_service() {
 		config_load openmptcprouter
 		config_foreach ss_omr_servers server
 	fi
-	ss_rules
+	local wait_proxy
+	wait_proxy=$(uci -q get shadowsocks-libev.ss_rules.wait_proxy 2>/dev/null)
+	[ "${wait_proxy:-1}" = "0" ] && ss_rules
 }
 
 stop_service() {
@@ -450,7 +500,8 @@ validate_ss_rules_section() {
 		'local_default:or("bypass", "forward", "checkdst"):bypass' \
 		'nft_tcp_extra:string' \
 		'nft_udp_extra:string' \
-		'ifnames:maxlength(15)'
+		'ifnames:maxlength(15)' \
+		'wait_proxy:bool:1'
 }
 
 validate_ss_server_section() {

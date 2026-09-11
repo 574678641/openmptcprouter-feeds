@@ -1,12 +1,12 @@
 #!/bin/sh /etc/rc.common
-# Copyright (C) 2018-2025 Ycarus (Yannick Chabanois) <ycarus@zugaina.org>
+# Copyright (C) 2018-2026 Ycarus (Yannick Chabanois) <ycarus@zugaina.org>
 # Released under GPL 3. See LICENSE for the full terms.
 
-START=99
+START=85
 
 USE_PROCD=1
 
-EXTRA_COMMANDS="set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel token set_bypass_ips set_vpn_ip"
+EXTRA_COMMANDS="set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
 
@@ -26,9 +26,13 @@ else
 	IP6TABLESSAVE="/usr/sbin/ip6tables-save"
 fi
 
+# Overridable so the test suite can point this at a mock instead of shelling
+# out to the real init script
+FIREWALL_INIT="${FIREWALL_INIT:-/etc/init.d/firewall}"
+
 
 _parse_result() {
-	result=$("echo $1 | jsonfilter -q -e '@.result'")
+	result=$(echo "$1" | jsonfilter -q -e '@.result')
 	echo $result
 }
 
@@ -40,6 +44,10 @@ _login() {
 	password="$(uci -q get openmptcprouter.${servername}.password)"
 	serverport="$(uci -q get openmptcprouter.${servername}.port)"
 	#[ -z "$server" ] && server="$(uci -q get openmptcprouter.${servername}.ip)"
+	if [ -z "$username" ] || [ -z "$password" ]; then
+		logger -t "OMR-VPS" "No credentials for server ${servername} yet, not asking for a token"
+		return
+	fi
 	if [ -z "$token" ]; then
 		login_on_server() {
 			[ -n "$token" ] && return
@@ -48,16 +56,19 @@ _login() {
 			#resolve="$(resolveip -t 5 $server)"
 			valid_ip6=$(valid_subnet6 $server)
 			if [ "$valid_ip6" = "ok" ]; then
-				auth=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d 'username='$username'&password='$password https://[$server]:$serverport/token`
+				auth=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://[$server]:$serverport/token`
 			else
-				auth=`curl --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d 'username='$username'&password='$password https://$server:$serverport/token`
+				auth=`curl --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://$server:$serverport/token`
 			fi
+			# An answer that carries no access_token is the server rejecting
+			# us, not a broken path: retrying it once per interface only adds
+			# fail2ban strikes. Only retry when nothing came back at all.
 			if [ -z "$auth" ]; then
 				for intf in $(multipath 2>/dev/null | awk '/default/ { print $1 }'); do
 					if [ "$valid_ip6" = "ok" ]; then
-						auth=`curl -6 --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d 'username='$username'&password='$password https://[$server]:$serverport/token`
+						auth=`curl -6 --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://[$server]:$serverport/token`
 					else
-						auth=`curl --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d 'username='$username'&password='$password https://$server:$serverport/token`
+						auth=`curl --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://$server:$serverport/token`
 					fi
 					[ -n "$auth" ] && break
 				done
@@ -101,7 +112,14 @@ _get_json() {
 			done
 		fi
 		if [ "$(echo $result | grep 'Could not validate credentials')" ]; then
-			result=''
+			token=''
+			_login
+			if [ "$valid_ip6" = "ok" ]; then
+				result=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://[$server]:$serverport/$route`
+			else
+				result=`curl --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://$server:$serverport/$route`
+			fi
+			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
 		fi
 		echo $result
 	} || {
@@ -133,7 +151,14 @@ _set_json() {
 			done
 		fi
 		if [ "$(echo $result | grep 'Could not validate credentials')" ]; then
-			result=''
+			token=''
+			_login
+			if [ "$valid_ip6" = "ok" ]; then
+				result=`curl -6 --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://[$server]:$serverport/$route`
+			else
+				result=`curl --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://$server:$serverport/$route`
+			fi
+			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
 		fi
 		echo $result
 	} || {
@@ -208,14 +233,14 @@ _set_softethervpn_vps() {
 	#current_port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
 	current_cipher="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.cipher')"
 	current_password="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.password')"
-	if [ "$current_key" != "$key" ]; then
+	if [ "$current_password" != "$password" ]; then
 		uci -q set openmptcprouter.${servername}.get_config="1"
 	fi
 	#if [ "$current_port" != "$port" ] || [ "$current_cipher" != "$cipher" ]; then
 	if [ "$current_cipher" != "$cipher" ]; then
 		local settings
 		#settings='{"port": '$port', "cipher": "'$cipher'"}'
-		settings='{"cipher": "'$cipher'", "password": "'$key'"}'
+		settings='{"cipher": "'$cipher'", "password": "'$password'"}'
 		echo $(_set_json "softethervpn" "$settings")
 	else
 		echo 1
@@ -243,6 +268,48 @@ _set_mlvpn_vps() {
 		local settings
 		settings='{"timeout": '$timeout', "reorder_buffer_size": "'$reorder_buffer_size'", "loss_tolerence": "'$loss_tolerence'", "password": "'$password'", "cleartext_data": "'$cleartext_data'"}'
 		echo $(_set_json "mlvpn" "$settings")
+	else
+		echo 1
+	fi
+}
+
+_set_mqvpn_vps() {
+	local enabled port key scheduler cc fec_enable fec_scheme reinjection_control reinjection_mode
+	local current_port
+	enabled="$(uci -q get mqvpn.settings.enable)"
+	[ "$enabled" != "1" ] && echo "MQVPN disabled" && return
+	# mqvpn.server.port is the user intent: push it to the server when it differs
+	port="$(uci -q get mqvpn.server.port)"
+	[ -z "$port" ] && echo 1 && return
+	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
+	[ -z "$vps_config" ] && return
+	current_port="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	[ -z "$current_port" ] && echo 1 && return
+	key="$(uci -q get mqvpn.auth.key)"
+	[ -z "$key" ] && echo "MQVPN key not set" && return
+	if [ "$current_port" != "$port" ]; then
+		scheduler="$(uci -q get mqvpn.multipath.scheduler)"
+		[ -z "$scheduler" ] && scheduler="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.scheduler')"
+		[ -z "$scheduler" ] && scheduler="wlb"
+		cc="$(uci -q get mqvpn.multipath.cc)"
+		[ -z "$cc" ] && cc="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.cc')"
+		[ -z "$cc" ] && cc="bbr2"
+		fec_enable="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.fec_enable')"
+		[ -z "$fec_enable" ] && fec_enable="false"
+		fec_scheme="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.fec_scheme')"
+		[ -z "$fec_scheme" ] && fec_scheme="xor"
+		reinjection_control="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reinjection_control')"
+		[ -z "$reinjection_control" ] && reinjection_control="false"
+		reinjection_mode="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reinjection_mode')"
+		[ -z "$reinjection_mode" ] && reinjection_mode="default"
+		local settings result
+		settings='{"key": "'$key'", "port": '$port', "scheduler": "'$scheduler'", "cc": "'$cc'", "fec_enable": '$fec_enable', "fec_scheme": "'$fec_scheme'", "reinjection_control": '$reinjection_control', "reinjection_mode": "'$reinjection_mode'"}'
+		result=$(_set_json "mqvpn" "$settings")
+		[ -n "$result" ] && uci -q set openmptcprouter.${servername}.get_config="1"
+		# The server moved its QUIC listener: restart the client so it
+		# reconnects on the new port instead of retrying the stale session
+		[ -n "$result" ] && /etc/init.d/mqvpn restart >/dev/null 2>&1
+		echo $result
 	else
 		echo 1
 	fi
@@ -416,6 +483,11 @@ _set_xray_server_vps() {
 	userid=$(uci -q get xray.omrout.s_vless_user_id)
 	protocol=$(uci -q get xray.omrout.protocol)
 	ss_method=$(uci -q get xray.omrout.s_shadowsocks_method)
+	# An empty method makes the xray-server.json shadowsocks inbound invalid
+	# and prevents the whole xray service from starting on the VPS
+	[ -z "$ss_method" ] && ss_method="2022-blake3-aes-256-gcm"
+	transport=$(uci -q get xray.omrout.ss_network)
+	[ -z "$transport" ] && transport="tcp"
 	if [ "$protocol" = "vless-reality" ] && [ "$enabled" = "1" ]; then
 		vless_reality='true'
 	else
@@ -427,10 +499,11 @@ _set_xray_server_vps() {
 	current_userid="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
 	current_vlessreality="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.vless_reality')"
 	current_method="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.ss_method')"
+	current_transport="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.transport')"
 
-	if [ "$current_userid" != "$userid" ] || [ "$current_vlessreality" != "$vless_reality" ] || [ "$current_method" != "$ss_method" ]; then
+	if [ "$current_userid" != "$userid" ] || [ "$current_vlessreality" != "$vless_reality" ] || [ "$current_method" != "$ss_method" ] || [ "$current_transport" != "$transport" ]; then
 		local settings
-		settings='{"userid": "'$userid'","vless_reality": '$vless_reality',"ss_method": "'$ss_method'"}'
+		settings='{"userid": "'$userid'","vless_reality": '$vless_reality',"ss_method": "'$ss_method'","transport": "'$transport'"}'
 		echo $(_set_json "xray" "$settings")
 	fi
 }
@@ -502,6 +575,7 @@ _get_vps_config() {
 					set network.omrvpn.proto='none'
 					commit network
 				EOF
+				ifup omrvpn >/dev/null 2>&1
 				glorytun_change=1
 			fi
 		else
@@ -517,6 +591,7 @@ _get_vps_config() {
 					set network.omrvpn.proto='dhcp'
 					commit network
 				EOF
+				ifup omrvpn >/dev/null 2>&1
 				glorytun_change=1
 			fi
 		fi
@@ -545,6 +620,7 @@ _get_vps_config() {
 					set network.omrvpn.proto='none'
 					commit network
 				EOF
+				ifup omrvpn >/dev/null 2>&1
 				glorytun_change=1
 			fi
 		else
@@ -560,8 +636,21 @@ _get_vps_config() {
 					set network.omrvpn.proto='dhcp'
 					commit network
 				EOF
+				ifup omrvpn >/dev/null 2>&1
 				glorytun_change=1
 			fi
+		fi
+	fi
+	if [ "$vpn" = "mqvpn" ]; then
+		# mqvpn assigns the tunnel IP itself: a leftover dhcp proto (softether
+		# or glorytun-dhcp era) keeps omrvpn pending forever in netifd, which
+		# breaks everything that depends on it (VXLAN tunlink, ...)
+		if [ "$(uci -q get network.omrvpn.proto)" = "dhcp" ]; then
+			uci -q batch <<-EOF >/dev/null
+				set network.omrvpn.proto='none'
+				commit network
+			EOF
+			ifup omrvpn >/dev/null 2>&1
 		fi
 	fi
 	vpsip="$(uci -q get openmptcprouter.${servername}.ip | awk '{print $1}')"
@@ -572,7 +661,7 @@ _get_vps_config() {
 		ip6resolve="$(resolveip -t 5 -6 $vpsip | head -n 1)"
 		[ -n "$ip6resolve" ] && vpsip="$ip6resolve"
 	fi
-	if [ -n "$(uci -q get shadowsocks-libev.sss0)" ] && [ "$(uci -q get shadowsocks-libev.sss0.server)" != "127.0.0.1" ] && [ "$(uci -q get shadowsocks-libev.sss0.server)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get shadowsocks-libev.sss0)" ] && [ "$(uci -q get shadowsocks-libev.sss0.server)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		config_foreach _set_ss_server server "server" $vpsip
 		uci -q batch <<-EOF >/dev/null
 			set shadowsocks-libev.sss0.server="$vpsip"
@@ -583,7 +672,7 @@ _get_vps_config() {
 			/etc/init.d/shadowsocks-libev restart
 		fi
 	fi
-	if [ -n "$(uci -q get shadowsocks-rust.sss0)" ] && [ "$(uci -q get shadowsocks-rust.sss0.server)" != "127.0.0.1" ] && [ "$(uci -q get shadowsocks-rust.sss0.server)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get shadowsocks-rust.sss0)" ] && [ "$(uci -q get shadowsocks-rust.sss0.server)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		config_foreach _set_ssrust_server server "server" $vpsip
 		uci -q batch <<-EOF >/dev/null
 			set shadowsocks-rust.sss0.server="$vpsip"
@@ -594,7 +683,7 @@ _get_vps_config() {
 			/etc/init.d/shadowsocks-rust restart
 		fi
 	fi
-	if [ -n "$(uci -q get v2ray.omrout)" ] && [ "$(uci -q get v2ray.omrout.s_vmess_address)" != "127.0.0.1" ] && [ "$(uci -q get v2ray.omrout.s_vmess_address)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get v2ray.omrout)" ] && [ "$(uci -q get v2ray.omrout.s_vmess_address)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set v2ray.omrout.s_vmess_address="$vpsip"
 			set v2ray.omrout.s_vless_address="$vpsip"
@@ -607,7 +696,7 @@ _get_vps_config() {
 			/etc/init.d/v2ray restart
 		fi
 	fi
-	if [ -n "$(uci -q get xray.omrout)" ] && [ "$(uci -q get xray.omrout.s_vmess_address)" != "127.0.0.1" ] && [ "$(uci -q get xray.omrout.s_vmess_address)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get xray.omrout)" ] && [ "$(uci -q get xray.omrout.s_vmess_address)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set xray.omrout.s_vmess_address="$vpsip"
 			set xray.omrout.s_vless_address="$vpsip"
@@ -622,7 +711,7 @@ _get_vps_config() {
 			/etc/init.d/xray restart
 		fi
 	fi
-	if [ -n "$(uci -q get openvpn.omr)" ] && [ "$(uci -q get openvpn.omr.remote)" != "127.0.0.1" ] && [ -z "$(uci -q get openvpn.omr.remote | grep $vpsip)" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get openvpn.omr)" ] && [ -z "$(uci -q get openvpn.omr.remote | grep $vpsip)" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			delete openvpn.omr.remote
 			add_list openvpn.omr.remote="$vpsip"
@@ -636,7 +725,7 @@ _get_vps_config() {
 	port="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.port')"
 	localip="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.client_ip')"
 	remoteip="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.host_ip')"
-	if [ -n "$(uci -q get dsvpn.vpn)" ] && ([ "$(uci -q get dsvpn.vpn.host)" != "127.0.0.1" ] && [ "$(uci -q get dsvpn.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]) || [ "$(uci -q get dsvpn.vpn.port)" != "$port" ] || [ "$(uci -q get dsvpn.vpn.localip)" != "$localip" ] || [ "$(uci -q get dsvpn.vpn.remoteip)" != "$remoteip" ]; then
+	if [ -n "$(uci -q get dsvpn.vpn)" ] && ([ "$(uci -q get dsvpn.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]) || [ "$(uci -q get dsvpn.vpn.port)" != "$port" ] || [ "$(uci -q get dsvpn.vpn.localip)" != "$localip" ] || [ "$(uci -q get dsvpn.vpn.remoteip)" != "$remoteip" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set dsvpn.vpn.port=$port
 			set dsvpn.vpn.localip=$localip
@@ -650,25 +739,46 @@ _get_vps_config() {
 		fi
 	fi
 
+	mqvpn_port_tmp="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	[ -z "$mqvpn_port_tmp" ] && mqvpn_port_tmp="65443"
+	# mqvpn.server.port is user intent (pushed to the VPS by _set_mqvpn_vps):
+	# only default it from the VPS when not set locally
+	[ -n "$(uci -q get mqvpn.server.port)" ] && mqvpn_port_tmp="$(uci -q get mqvpn.server.port)"
+	if [ -n "$(uci -q get mqvpn.server)" ] && { [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port_tmp" ]; } && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port_tmp"
+			commit mqvpn
+		EOF
+		if [ "$(uci -q get mqvpn.settings.enable)" = "1" ]; then
+			logger -t "OMR-VPS" "Restart MQVPN..."
+			/etc/init.d/mqvpn restart
+		fi
+	fi
+
 	port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
-	if [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ([ "$(uci -q get softethervpn.openmptcprouter.host)" != "127.0.0.1" ] && [ "$(uci -q get softethvpn.openmptcprouter.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]) || [ "$(uci -q get softethervpn.openmptcprouter.port)" != "$port" ]; then
+	if [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && [ -n "$port" ] && { { [ "$(uci -q get softethervpn.openmptcprouter.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; } || [ "$(uci -q get softethervpn.openmptcprouter.port)" != "$port" ]; }; then
 		uci -q batch <<-EOF >/dev/null
 			set softethervpn.openmptcprouter.port=$port
 			set softethervpn.openmptcprouter.host="$vpsip"
 			commit softethervpn
 		EOF
-		uci -q batch <<-EOF >/dev/null
-			set network.omrvpn.proto='dhcp'
-			commit network
-		EOF
-			
-		if [ "$(uci -q get softethervpn.openmptcprouter.enable)" = "1" ]; then
+		# omrvpn is shared by all VPNs: only switch it to DHCP when
+		# SoftEtherVPN is really the VPN in use
+		if [ "$vpn" = "softethervpn" ] || [ "$vpn" = "softether" ]; then
+			uci -q batch <<-EOF >/dev/null
+				set network.omrvpn.proto='dhcp'
+				commit network
+			EOF
+			ifup omrvpn >/dev/null 2>&1
+		fi
+		if [ "$(uci -q get softethervpn.openmptcprouter.enable)" = "1" ] && [ -f /etc/init.d/softethervpnclient ]; then
 			logger -t "OMR-VPS" "Restart SoftEtherVPN..."
 			/etc/init.d/softethervpnclient restart
 		fi
 	fi
 
-	if [ -n "$(uci -q get mlvpn.general)" ] && [ "$(uci -q get mlvpn.general.host)" != "127.0.0.1" ] && [ "$(uci -q get mlvpn.general.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ] && [ -f /etc/init.d/mlvpn ]; then
+	if [ -n "$(uci -q get mlvpn.general)" ] && [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ] && [ "$(uci -q get mlvpn.general.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ] && [ -f /etc/init.d/mlvpn ]; then
 		uci -q batch <<-EOF >/dev/null
 			set mlvpn.general=mlvpn
 			set mlvpn.general.host="$vpsip"
@@ -679,13 +789,13 @@ _get_vps_config() {
 			/etc/init.d/mlvpn restart
 		fi
 	fi
-	if [ -n "$(uci -q get glorytun.vpn)" ] && [ "$(uci -q get glorytun.vpn.host)" != "127.0.0.1" ] && [ "$(uci -q get glorytun.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get glorytun.vpn)" ] && [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ] && [ "$(uci -q get glorytun.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set glorytun.vpn.host="$vpsip"
 		EOF
 		glorytun_change=1
 	fi
-	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && [ "$(uci -q get glorytun-udp.vpn.host)" != "127.0.0.1" ] && [ "$(uci -q get glorytun-udp.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
+	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ] && [ "$(uci -q get glorytun-udp.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set glorytun-udp.vpn.host="$vpsip"
 		EOF
@@ -722,7 +832,7 @@ _get_gre_tunnel() {
 			peeraddr="$(echo $tunnel | jsonfilter -q -e '@.remote_ip')"
 			ipaddr="$(echo $tunnel | jsonfilter -q -e '@.local_ip')"
 			publicaddr="$(echo $tunnel | jsonfilter -q -e '@.public_ip')"
-			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omr_out.protocol)" ])); then
+			if [ "$peeraddr" != "" ] && [ "$ipaddr" != "" ] && [ "$publicaddr" != "" ] && [ "$vpnip_local" != "" ] && ([ "$(uci -q get network.oip${i}.ipaddr)" != "$peeraddr" ] || [ "$(uci -q get network.oip${i}.gateway)" != "$ipaddr" ] || [ "$(uci -q get network.oip${i}gre.ipaddr)" != "$vpnip_local" ] || ([ -n "$(uci -q get xray)" ] && [ -z "$(uci -q get xray.oip${i}server.s_vless_user_id)" ]) || ([ -n "$(uci -q get xray.oip${i}server_tunnel.protocol)" ] && [ "$(uci -q get xray.oip${i}server_tunnel.protocol)" != "$(uci -q get xray.omrout.protocol)" ])); then
 				uci -q batch <<-EOF >/dev/null
 					set network.oip${i}gre=interface
 					set network.oip${i}gre.label="GRE tunnel for $publicaddr"
@@ -869,7 +979,8 @@ _get_gre_tunnel() {
 							set xray.oip${i}_redir.listen='0.0.0.0'
 							set xray.oip${i}_redir.port='180${i}'
 							set xray.oip${i}_redir.protocol='dokodemo-door'
-							set xray.oip${i}_redir.s_dokodemo_door_network='tcp' 'udp'
+							set xray.oip${i}_redir.s_dokodemo_door_network='tcp'
+							add_list xray.oip${i}_redir.s_dokodemo_door_network='udp'
 							set xray.oip${i}_redir.ss_sockopt_tproxy='redirect'
 							set xray.oip${i}_redir.ss_sockopt_tcp_fast_open='1'
 							set xray.oip${i}_redir.ss_sockopt_mptcp='1'
@@ -878,7 +989,7 @@ _get_gre_tunnel() {
 							set xray.oip${i}_routing.tag="oip${i}_routing"
 							set xray.oip${i}_routing.type='field'
 							set xray.oip${i}_routing.inbound_tag="oip${i}_redir"
-							set xray.oip${i}_routing.outbound_tag="oip${i}_tunnel"
+							set xray.oip${i}_routing.outbound_tag="oip${i}server_tunnel"
 							add_list xray.main_routing.rules="oip${i}_routing"
 							set xray.oip${i}_transparent_proxy=transparent_proxy
 							set xray.oip${i}_transparent_proxy.proxy_mode='default'
@@ -902,6 +1013,318 @@ _get_gre_tunnel() {
 set_gre_tunnel() {
 	config_load openmptcprouter
 	config_foreach _get_gre_tunnel server
+}
+
+_set_vxlan_vps() {
+	local settings result vxlan_enabled vxlan_current vxlan_mode vxlan_mode_current
+	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
+	[ -z "$vps_config" ] && return
+	if [ "$(uci -q get openmptcprouter.settings.vxlan)" = "1" ]; then
+		vxlan_enabled="true"
+	else
+		vxlan_enabled="false"
+	fi
+	vxlan_mode="$(uci -q get openmptcprouter.settings.vxlan_mode)"
+	[ "$vxlan_mode" = "l2" ] || vxlan_mode="l3"
+	vxlan_current="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.enabled')"
+	[ -z "$vxlan_current" ] && vxlan_current="false"
+	vxlan_mode_current="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.mode')"
+	[ -z "$vxlan_mode_current" ] && vxlan_mode_current="l3"
+	if [ "$vxlan_current" != "$vxlan_enabled" ] || [ "$vxlan_mode_current" != "$vxlan_mode" ]; then
+		settings='{"enable": '$vxlan_enabled', "mode": "'$vxlan_mode'"}'
+		result=$(_set_json "vxlan" "$settings")
+		[ "$(_parse_result "$result")" = "done" ] && vps_config=$(_get_json "config")
+	fi
+}
+
+_bridge_name="omrvxlanbr"
+_bridge_ifname="br-omrvxlan"
+_vxlan_bridge_lookup=""
+_vxlan_bridge_section=""
+_vxlan_active_bridge_section=""
+
+_vxlan_bridge_section_by_name_cb() {
+	local section type name
+	section="$1"
+	[ -n "$_vxlan_bridge_section" ] && return
+	config_get type "$section" type
+	[ "$type" = "bridge" ] || return
+	config_get name "$section" name
+	if [ "$name" = "$_vxlan_bridge_lookup" ] || [ "$section" = "$_vxlan_bridge_lookup" ]; then
+		_vxlan_bridge_section="$section"
+	fi
+}
+
+_vxlan_bridge_section_by_name() {
+	_vxlan_bridge_lookup="$1"
+	_vxlan_bridge_section=""
+	config_load network
+	config_foreach _vxlan_bridge_section_by_name_cb device
+	echo "$_vxlan_bridge_section"
+}
+
+_vxlan_active_bridge_section_cb() {
+	local section target
+	section="$1"
+	[ -n "$_vxlan_active_bridge_section" ] && return
+	config_get target "$section" omrvxlan_target_if
+	[ -n "$target" ] && _vxlan_active_bridge_section="$section"
+}
+
+_vxlan_active_bridge_section() {
+	if [ -n "$(uci -q get network.${_bridge_name})" ]; then
+		echo "$_bridge_name"
+		return
+	fi
+	_vxlan_active_bridge_section=""
+	config_load network
+	config_foreach _vxlan_active_bridge_section_cb device
+	echo "$_vxlan_active_bridge_section"
+}
+
+# Which local network interface to bridge omrvxlan into (L2 mode); any
+# configured interface is allowed, not just the LAN zone's. Falls back to
+# lan when unset, malformed, nonexistent, or one of the tunnel's own
+# interfaces (bridging into those would break the tunnel itself)
+_vxlan_bridge_target_if() {
+	local target
+	target="$(uci -q get openmptcprouter.settings.vxlan_bridge_if)"
+	case "$target" in
+		''|*[!A-Za-z0-9_-]*|loopback|omrvpn|omrvxlan|omrvxlanip) target="lan" ;;
+	esac
+	[ -n "$(uci -q get network.$target)" ] || target="lan"
+	echo "$target"
+}
+
+# Bridge omrvxlan into the configured interface's device (L2 mode): the
+# tunnel carries that interface's broadcast domain instead of a routed P2P
+# link. Defaults to lan when unset.
+_vxlan_join_lan_bridge() {
+	local target_if lan_device lan_ifname bridge_section
+	target_if="$(_vxlan_bridge_target_if)"
+	lan_device="$(uci -q get network.${target_if}.device)"
+	lan_ifname="$(uci -q get network.${target_if}.ifname)"
+	bridge_section="$(_vxlan_bridge_section_by_name "$lan_device")"
+	if [ -n "$bridge_section" ]; then
+		uci -q batch <<-EOF >/dev/null
+			set network.${bridge_section}.omrvxlan_lan_device="$lan_device"
+			set network.${bridge_section}.omrvxlan_target_if="$target_if"
+			set network.${bridge_section}.omrvxlan_existing_bridge='1'
+		EOF
+		if [ -z "$(uci -q get network.${bridge_section}.ports | grep 'omrvxlan')" ]; then
+			uci -q add_list network.${bridge_section}.ports='omrvxlan'
+		fi
+		return
+	fi
+	if [ "$lan_device" != "$_bridge_name" ]; then
+		# Wrap the target interface's current device in a bridge so omrvxlan
+		# can join it as a port; the original device and interface name are
+		# stashed to unwind on disable or on a later target change
+		uci -q batch <<-EOF >/dev/null
+			set network.${_bridge_name}=device
+			set network.${_bridge_name}.type='bridge'
+			set network.${_bridge_name}.name="$_bridge_ifname"
+			set network.${_bridge_name}.omrvxlan_lan_device="$lan_device"
+			set network.${_bridge_name}.omrvxlan_target_if="$target_if"
+		EOF
+		[ -n "$lan_ifname" ] && uci -q set network.${_bridge_name}.omrvxlan_lan_ifname="$lan_ifname"
+		uci -q add_list network.${_bridge_name}.ports="$lan_device"
+		uci -q set network.${target_if}.device="$_bridge_ifname"
+		uci -q delete network.${target_if}.ifname
+	fi
+	if [ -z "$(uci -q get network.${_bridge_name}.ports | grep 'omrvxlan')" ]; then
+		uci -q add_list network.${_bridge_name}.ports='omrvxlan'
+	fi
+}
+
+# Undo _vxlan_join_lan_bridge: drop omrvxlan from the bridge and, once it was
+# the only extra port, restore the stashed interface's original device
+_vxlan_leave_lan_bridge() {
+	local bridge_section lan_device lan_ifname target_if existing_bridge
+	bridge_section="$(_vxlan_active_bridge_section)"
+	[ -z "$bridge_section" ] && bridge_section="$_bridge_name"
+	lan_device="$(uci -q get network.${bridge_section}.omrvxlan_lan_device)"
+	lan_ifname="$(uci -q get network.${bridge_section}.omrvxlan_lan_ifname)"
+	target_if="$(uci -q get network.${bridge_section}.omrvxlan_target_if)"
+	existing_bridge="$(uci -q get network.${bridge_section}.omrvxlan_existing_bridge)"
+	[ -z "$target_if" ] && target_if="lan"
+	uci -q del_list network.${bridge_section}.ports='omrvxlan'
+	if [ "$existing_bridge" = "1" ]; then
+		uci -q batch <<-EOF >/dev/null
+			delete network.${bridge_section}.omrvxlan_lan_device
+			delete network.${bridge_section}.omrvxlan_target_if
+			delete network.${bridge_section}.omrvxlan_existing_bridge
+		EOF
+	elif [ -n "$lan_device" ]; then
+		uci -q set network.${target_if}.device="$lan_device"
+		if [ -n "$lan_ifname" ]; then
+			uci -q set network.${target_if}.ifname="$lan_ifname"
+		else
+			uci -q delete network.${target_if}.ifname
+		fi
+		uci -q delete network.${bridge_section}
+	fi
+}
+
+# Routed P2P mode: omrvxlan gets no address itself, omrvxlanip carries the
+# tunnel IPs, both networks join the vpn firewall zone like any other VPN link
+_vxlan_apply_l3() {
+	local vxlan_ip6addr
+	vxlan_ip6addr="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.remoteip6')"
+	[ "$(uci -q get openmptcprouter.settings.disable_ipv6)" = "1" ] && vxlan_ip6addr=""
+	uci -q batch <<-EOF >/dev/null
+		set network.omrvxlanip=interface
+		set network.omrvxlanip.label="VXLAN tunnel IPs"
+		set network.omrvxlanip.proto=static
+		set network.omrvxlanip.device="@omrvxlan"
+		set network.omrvxlanip.ipaddr="$vxlan_ipaddr"
+		set network.omrvxlanip.multipath='off'
+		set network.omrvxlanip.defaultroute='0'
+		set network.omrvxlanip.peerdns='0'
+		delete network.omrvxlanip.ip6addr
+	EOF
+	[ -n "$vxlan_ip6addr" ] && uci -q set network.omrvxlanip.ip6addr="$vxlan_ip6addr"
+	if [ -z "$(uci -q get firewall.zone_vpn.network | grep omrvxlan)" ]; then
+		uci -q add_list firewall.zone_vpn.network="omrvxlan"
+		uci -q add_list firewall.zone_vpn.network="omrvxlanip"
+	fi
+	ifup omrvxlanip >/dev/null 2>&1
+}
+
+_vxlan_teardown_l3() {
+	ifdown omrvxlanip >/dev/null 2>&1
+	uci -q batch <<-EOF >/dev/null
+		delete network.omrvxlanip
+		commit network
+	EOF
+	uci -q del_list firewall.zone_vpn.network="omrvxlan"
+	uci -q del_list firewall.zone_vpn.network="omrvxlanip"
+}
+
+_get_vxlan() {
+	local vxlan_state vxlan_vni vxlan_port vxlan_mtu vxlan_peeraddr vxlan_mode vxlan_ipaddr vxlan_bridge_if vxlan_bridge_section vxlan_bridge_if_stored vxlan_bridge_status
+	[ -z "$servername" ] && servername=$1
+	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
+	[ -z "$vps_config" ] && return
+	vxlan_state="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.enabled')"
+	if [ "$vxlan_state" = "true" ] && [ "$(uci -q get openmptcprouter.settings.vpn)" != "none" ]; then
+		vxlan_vni="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.vni')"
+		vxlan_port="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.port')"
+		vxlan_mtu="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.mtu')"
+		vxlan_peeraddr="$(echo "$vps_config" | jsonfilter -q -e '@.vpn.localip')"
+		vxlan_mode="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.mode')"
+		[ "$vxlan_mode" = "l2" ] || vxlan_mode="l3"
+		vxlan_ipaddr="$(echo "$vps_config" | jsonfilter -q -e '@.vxlan.remoteip')"
+		vxlan_bridge_if="$(_vxlan_bridge_target_if)"
+		vxlan_bridge_section="$(_vxlan_active_bridge_section)"
+		# A bridge from before this option existed has no stashed target;
+		# it was always lan back then, so treat missing as lan rather than
+		# as a mismatch (avoids an unnecessary rejoin on first run post-upgrade)
+		vxlan_bridge_if_stored="$(uci -q get network.${vxlan_bridge_section:-$_bridge_name}.omrvxlan_target_if)"
+		[ -z "$vxlan_bridge_if_stored" ] && vxlan_bridge_if_stored="lan"
+		[ -z "$vxlan_vni" ] && return
+		[ -z "$vxlan_peeraddr" ] && return
+		[ "$vxlan_mode" = "l3" ] && [ -z "$vxlan_ipaddr" ] && return
+		if [ "$(uci -q get network.omrvxlan.peeraddr)" != "$vxlan_peeraddr" ] || [ "$(uci -q get network.omrvxlan.vid)" != "$vxlan_vni" ] || [ "$(uci -q get network.omrvxlan.port)" != "$vxlan_port" ] || [ "$(uci -q get network.omrvxlan.mtu)" != "$vxlan_mtu" ] || { [ "$vxlan_mode" = "l2" ] && [ -z "$(uci -q get network.${vxlan_bridge_section:-$_bridge_name}.ports | grep 'omrvxlan')" ]; } || { [ "$vxlan_mode" = "l2" ] && [ -n "$vxlan_bridge_section" ] && [ "$vxlan_bridge_if_stored" != "$vxlan_bridge_if" ]; } || { [ "$vxlan_mode" = "l3" ] && [ "$(uci -q get network.omrvxlanip.ipaddr)" != "$vxlan_ipaddr" ]; }; then
+			# If the mode changed since the last run, unwind whichever mode's
+			# state is currently on disk before applying the new one. Also
+			# unwind an L2 bridge whose target interface changed, so the
+			# next join re-wraps the newly selected interface instead.
+			[ -n "$(uci -q get network.omrvxlanip)" ] && [ "$vxlan_mode" = "l2" ] && _vxlan_teardown_l3
+			[ -n "$vxlan_bridge_section" ] && [ "$vxlan_mode" = "l3" ] && _vxlan_leave_lan_bridge
+			[ -n "$vxlan_bridge_section" ] && [ "$vxlan_mode" = "l2" ] && [ "$vxlan_bridge_if_stored" != "$vxlan_bridge_if" ] && _vxlan_leave_lan_bridge
+			uci -q batch <<-EOF >/dev/null
+				set network.omrvxlan=interface
+				set network.omrvxlan.label="VXLAN tunnel over the VPN"
+				set network.omrvxlan.proto=vxlan
+				set network.omrvxlan.tunlink=omrvpn
+				set network.omrvxlan.peeraddr="$vxlan_peeraddr"
+				set network.omrvxlan.port="$vxlan_port"
+				set network.omrvxlan.vid="$vxlan_vni"
+				set network.omrvxlan.mtu="$vxlan_mtu"
+				set network.omrvxlan.ttl='255'
+				set network.omrvxlan.multipath='off'
+				set network.omrvxlan.defaultroute='0'
+				set network.omrvxlan.peerdns='0'
+			EOF
+			if [ "$vxlan_mode" = "l2" ]; then
+				_vxlan_join_lan_bridge
+			else
+				_vxlan_apply_l3
+			fi
+			uci -q commit network
+			# The vpn zone input chain only accepts ICMP: without this rule the
+			# VXLAN UDP encap replies arriving on the VPN tunnel are rejected
+			uci -q batch <<-EOF >/dev/null
+				set firewall.omrvxlan=rule
+				set firewall.omrvxlan.enabled='1'
+				set firewall.omrvxlan.target='ACCEPT'
+				set firewall.omrvxlan.name='Allow-VXLAN'
+				set firewall.omrvxlan.proto='udp'
+				set firewall.omrvxlan.src='vpn'
+				set firewall.omrvxlan.dest_port='${vxlan_port:-4789}'
+				commit firewall
+			EOF
+			logger -t "OMR-VPS" "VXLAN tunnel configured over the VPN (mode: $vxlan_mode)"
+			ifup omrvxlan >/dev/null 2>&1
+			ubus call network reload >/dev/null 2>&1
+			"$FIREWALL_INIT" reload >/dev/null 2>&1
+			if [ "$vxlan_mode" = "l2" ]; then
+				# The target interface's device now points at the bridge. A
+				# bridge can report kernel-level "up" even when the actual L3
+				# path is broken (e.g. tunnel not really passing traffic), so
+				# also require a live IPv4 address -- that's what an interface
+				# doubling as the management/LAN path actually needs to keep
+				# working. Unwind rather than strand the router.
+				sleep 2
+				vxlan_bridge_status="$(ubus call network.interface.${vxlan_bridge_if} status 2>/dev/null)"
+				if [ -n "$vxlan_bridge_status" ] && { [ "$(echo "$vxlan_bridge_status" | jsonfilter -q -e '@.up')" != "true" ] || \
+				   [ -z "$(echo "$vxlan_bridge_status" | jsonfilter -q -e '@["ipv4-address"][0].address')" ]; }; then
+					logger -t "OMR-VPS" "VXLAN L2 bridge on ${vxlan_bridge_if} did not come up cleanly -- rolling back to avoid stranding the router"
+					_vxlan_leave_lan_bridge
+					uci -q commit network
+					ubus call network reload >/dev/null 2>&1
+				fi
+			fi
+		fi
+	elif [ -n "$(uci -q get network.omrvxlan)" ]; then
+		[ -n "$(uci -q get network.omrvxlanip)" ] && _vxlan_teardown_l3
+		[ -n "$(_vxlan_active_bridge_section)" ] && _vxlan_leave_lan_bridge
+		ifdown omrvxlan >/dev/null 2>&1
+		uci -q batch <<-EOF >/dev/null
+			delete network.omrvxlan
+			commit network
+		EOF
+		uci -q delete firewall.omrvxlan
+		uci -q commit firewall
+		ubus call network reload >/dev/null 2>&1
+		"$FIREWALL_INIT" reload >/dev/null 2>&1
+		logger -t "OMR-VPS" "VXLAN tunnel removed"
+	fi
+}
+
+_set_vxlan_service() {
+	local tokenserver user_permission
+	servername=$1
+	[ "$(uci -q get openmptcprouter.${servername}.disabled)" = "1" ] && return
+	# VXLAN rides on top of the VPN of the master/current server only
+	([ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]) || return
+	vps_config=""
+	tokenserver=$(_get_token $servername)
+	server="$(echo $tokenserver | cut -f1 -d:)"
+	serverport="$(echo $tokenserver | cut -f2 -d:)"
+	token="$(echo $tokenserver | cut -f3 -d:)"
+	[ -z "$token" ] && return
+	vps_config=$(_get_json "config")
+	[ -z "$vps_config" ] && return
+	user_permission="$(echo "$vps_config" | jsonfilter -q -e '@.user.permission')"
+	[ "$user_permission" != "ro" ] && _set_vxlan_vps
+	_get_vxlan
+}
+
+set_vxlan() {
+	config_load openmptcprouter
+	config_foreach _set_vxlan_service server
 }
 
 
@@ -1013,7 +1436,7 @@ _set_redirect_ports_from_vps() {
 }
 
 _set_mptcp_vps() {
-	local settings
+	local settings path_manager_changed
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
 	mptcp_enabled_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.enabled')"
@@ -1023,6 +1446,10 @@ _set_mptcp_vps() {
 	syn_retries_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retries')"
 	congestion_control_current="$(echo "$vps_config" | jsonfilter -q -e '@.network.congestion_control')"
 	mptcp_version_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.version')"
+	close_timeout_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.close_timeout')"
+	pm_type_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.pm_type')"
+	stale_loss_cnt_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.stale_loss_cnt')"
+	syn_retrans_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retrans_before_tcp_fallback')"
 	mptcp_enabled="$(uci -q get network.globals.multipath)"
 	if [ "$mptcp_enabled" = "disable" ]; then
 		mptcp_enabled="0"
@@ -1035,15 +1462,283 @@ _set_mptcp_vps() {
 	syn_retries="$(uci -q get network.globals.mptcp_syn_retries)"
 	congestion="$(uci -q get network.globals.congestion)"
 	mptcp_version="$(uci -q get network.globals.mptcp_version)"
+	close_timeout="$(uci -q get network.globals.mptcp_close_timeout)"
+	pm_type="$(uci -q get network.globals.mptcp_pm_type)"
+	stale_loss_cnt="$(uci -q get network.globals.mptcp_stale_loss_cnt)"
+	syn_retrans_before_tcp_fallback="$(uci -q get network.globals.mptcp_syn_retrans_before_tcp_fallback)"
 	[ -z "$mptcp_version" ] && mptcp_version="0"
 	[ ! -f /proc/sys/net/mptcp/mptcp_enabled ] && mptcp_version="1"
 	[ -z "$congestion" ] && congestion="bbr"
-	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || ([ "$path_manager_current" != "" ] && [ "$path_manager_current" != "$path_manager" ]) || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ]; then
-		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'"}'
+	# These four v1-only knobs are recent additions: on a router that
+	# predates them, or where the user never touched them, their uci option
+	# is simply absent and `uci -q get` returns "". Left as "", the JSON
+	# below would post e.g. "close_timeout": "" for an int field the VPS
+	# side declares as `int = 0`, which the VPS's admin API rejects with a
+	# bare 422 before it ever reaches its own error handling -- see
+	# https://github.com/Ysurac/openmptcprouter/issues/4350.
+	[ -z "$close_timeout" ] && close_timeout="0"
+	[ -z "$pm_type" ] && pm_type="0"
+	[ -z "$stale_loss_cnt" ] && stale_loss_cnt="0"
+	[ -z "$syn_retrans_before_tcp_fallback" ] && syn_retrans_before_tcp_fallback="0"
+	# The VPS reports the path manager its own kernel really registered, and
+	# maps the out-of-tree v0.9x vocabulary (default/fullmesh/ndiffports/
+	# binder/netlink, all of them in-kernel path managers) onto mainline's
+	# 'kernel' before applying it. So 'kernel' there against one of those
+	# names here is not a difference worth pushing -- re-sending 'fullmesh'
+	# at every sync only makes the VPS warn and renormalize it again -- while
+	# 'kernel' there against 'userspace' here is a real change and used to be
+	# swallowed by a blanket "ignore 'kernel'" test, leaving the switch to
+	# mptcpd's userspace PM stuck on the router until some *other* mptcp
+	# setting happened to change too.
+	path_manager_changed=0
+	if [ -n "$path_manager_current" ] && [ "$path_manager_current" != "$path_manager" ]; then
+		path_manager_changed=1
+		if [ "$path_manager_current" = "kernel" ]; then
+			case "$path_manager" in
+				default|fullmesh|ndiffports|binder|netlink) path_manager_changed=0 ;;
+			esac
+		fi
+	fi
+	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || [ "$path_manager_changed" = "1" ] || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ] || ([ -n "$close_timeout_current" ] && [ "$close_timeout_current" != "0" ] && [ "$close_timeout_current" != "$close_timeout" ]) || ([ -n "$pm_type_current" ] && [ "$pm_type_current" != "0" ] && [ "$pm_type_current" != "$pm_type" ]) || ([ -n "$stale_loss_cnt_current" ] && [ "$stale_loss_cnt_current" != "0" ] && [ "$stale_loss_cnt_current" != "$stale_loss_cnt" ]) || ([ -n "$syn_retrans_current" ] && [ "$syn_retrans_current" != "0" ] && [ "$syn_retrans_current" != "$syn_retrans_before_tcp_fallback" ]); then
+		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'","close_timeout": "'$close_timeout'","pm_type": "'$pm_type'","stale_loss_cnt": "'$stale_loss_cnt'","syn_retrans_before_tcp_fallback": "'$syn_retrans_before_tcp_fallback'"}'
 		echo $(_set_json "mptcp" "$settings")
 	else
 		echo 1
 	fi
+}
+
+_get_dscp_vps_pin() {
+	local section="$1" dscp remote_id download_iface
+	# Reads network's anonymous `config dscp_pin` sections (added by
+	# luci-app-mptcp's DSCP/Weight Routing page), one row per DSCP class
+	# with independent upload_interface/download_interface. Only
+	# download_interface matters here -- the download side is deliberately
+	# free to point at a different WAN than the upload pin
+	# (041-multipath-dscp/dscp_iface handles upload, locally, and never
+	# looks at this field at all).
+	download_iface="$(uci -q get network.${section}.download_interface)"
+	if [ -z "$download_iface" ]; then
+		# No explicit download pin for this class -- always fall back to
+		# the row's own upload_interface instead of pushing nothing. This
+		# mirrors mqvpn's own downlink, which always follows upload with
+		# no separate field at all.
+		download_iface="$(uci -q get network.${section}.upload_interface)"
+		[ -z "$download_iface" ] && return
+	fi
+	dscp="$(uci -q get network.${section}.dscp)"
+	[ -z "$dscp" ] && return
+	remote_id="$(uci -q get network.${download_iface}.ip4table)"
+	[ -z "$remote_id" ] && return
+	[ -n "$dscp_pins" ] && dscp_pins="${dscp_pins},"
+	dscp_pins="${dscp_pins}{\"dscp\":\"${dscp}\",\"remote_id\":${remote_id}}"
+}
+
+# Pushes network's dscp_pin rows' download_interface (router-side pick of
+# which WAN should carry each DSCP class on the way *down*, see
+# mptcp-dscp-manager) to the VPS as {dscp -> MPTCP remote endpoint id}
+# pairs, so the VPS's own bpf_dscp scheduler can pin its send-side subflow
+# choice for the same DSCP classes via dscp_remote_id -- see
+# mptcp-bpf-dscp/debian/README.Debian for why that map is keyed by
+# remote_id instead of local IP on the VPS. Closes the "no automated
+# sync... copy the number over manually" gap that doc used to describe.
+# download_interface is independent of the same row's upload_interface
+# (applied locally, separately, by 041-multipath-dscp) -- a class's
+# upload and download sides can legitimately be pinned to different WANs.
+# When a row has no download_interface at all, _get_dscp_vps_pin always
+# falls back to that row's upload_interface instead, so a class only
+# pinned on Upload still gets a gateway-side pin rather than none.
+#
+# Skips the round trip to the VPS entirely (not even a GET) when the
+# locally-desired pin set matches the last one we successfully pushed,
+# cached in $dscp_vps_pins_cache -- cheap enough to call unconditionally
+# from a tracker hook every cycle. The cache is process-ephemeral (/tmp),
+# which is intentional: it forces one real push after every reboot,
+# matching the BPF map itself also resetting on reboot.
+_set_mptcp_dscp_vps() {
+	local dscp_pins="" desired dscp_vps_pins_cache="/tmp/.mptcp_dscp_vps_pins-${servername}"
+	config_load network
+	config_foreach _get_dscp_vps_pin dscp_pin
+	desired="[${dscp_pins}]"
+	if [ "$(cat "$dscp_vps_pins_cache" 2>/dev/null)" = "$desired" ]; then
+		echo 1
+		return
+	fi
+	result=$(_set_json "mptcp_dscp" "{\"pins\":${desired}}")
+	if [ -n "$result" ]; then
+		echo "$desired" > "$dscp_vps_pins_cache"
+		echo "$result"
+	fi
+}
+
+# Standalone entry point (see EXTRA_COMMANDS) so the mptcp-dscp-manager
+# tracker hook can trigger a sync without going through the full
+# _config_service()/start_service() cycle. Bootstraps servername/token
+# itself, same pattern as _set_vps_firewall's standalone use.
+set_mptcp_dscp_vps() {
+	local dscpservername=$1
+	if [ -z "$dscpservername" ]; then
+		config_load openmptcprouter
+		config_foreach set_mptcp_dscp_vps server
+		return
+	fi
+	servername=$dscpservername
+	[ "$(uci -q get openmptcprouter.${servername}.disabled)" = "1" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
+	token=""
+	_login
+	[ -z "$token" ] && return
+	_set_mptcp_dscp_vps
+}
+
+_get_weight_vps_pin() {
+	local iface="$1" weight remote_id
+	weight="$(uci -q get network.${iface}.multipath_weight)"
+	[ -z "$weight" ] && return
+	remote_id="$(uci -q get network.${iface}.ip4table)"
+	[ -z "$remote_id" ] && return
+	[ -n "$weight_pins" ] && weight_pins="${weight_pins},"
+	weight_pins="${weight_pins}{\"remote_id\":${remote_id},\"weight\":${weight}}"
+}
+
+# VPS-side counterpart of _set_mptcp_dscp_vps, same reasoning: pushes
+# network.<iface>.multipath_weight (router-side bpf_weight/bpf_weight_rr
+# weights, see mptcp-weight-manager) to the VPS as
+# {MPTCP remote endpoint id -> weight} pairs, so the VPS's own scheduler
+# can weight its send-side subflow choice for the same WANs via
+# weight_remote_id instead of defaulting to neutral 100 for everything.
+_set_mptcp_weight_vps() {
+	local weight_pins="" desired weight_vps_pins_cache="/tmp/.mptcp_weight_vps_pins-${servername}"
+	config_load network
+	config_foreach _get_weight_vps_pin interface
+	desired="[${weight_pins}]"
+	if [ "$(cat "$weight_vps_pins_cache" 2>/dev/null)" = "$desired" ]; then
+		echo 1
+		return
+	fi
+	result=$(_set_json "mptcp_weight" "{\"weights\":${desired}}")
+	if [ -n "$result" ]; then
+		echo "$desired" > "$weight_vps_pins_cache"
+		echo "$result"
+	fi
+}
+
+# Standalone entry point (see EXTRA_COMMANDS), same bootstrap pattern as
+# set_mptcp_dscp_vps.
+set_mptcp_weight_vps() {
+	local wservername=$1
+	if [ -z "$wservername" ]; then
+		config_load openmptcprouter
+		config_foreach set_mptcp_weight_vps server
+		return
+	fi
+	servername=$wservername
+	[ "$(uci -q get openmptcprouter.${servername}.disabled)" = "1" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
+	token=""
+	_login
+	[ -z "$token" ] && return
+	_set_mptcp_weight_vps
+}
+
+# Reads one DSCP class's current ipset/nftables-set members on this router
+# ($2 = "4" or "6"), trying both the legacy iptables+ipset naming (omr-dscp:
+# omr_dscp-<class> / omr_dscp6-<class>) and the fw4/nftables naming
+# (omr-dscp-nft: omr_dscp_<class>_4 / omr_dscp_<class>_6) -- exactly one of
+# the two variants is installed, the other command is just a silent no-op.
+# `nft list set`'s plain text output (not -j/JSON) is used deliberately: its
+# "elements = { a, b, c }" line has been a stable format for years and is a
+# single sed+tr away from a token list, whereas the JSON element shape
+# differs (bare string vs {"prefix":...} object) depending on whether an
+# entry was inserted as a single IP or a CIDR, which would need two
+# different jsonfilter paths to cover reliably.
+_get_dscp_class_members() {
+	local class="$1" fam="$2" legacy_name
+
+	[ "$fam" = "6" ] && legacy_name="omr_dscp6-${class}" || legacy_name="omr_dscp-${class}"
+
+	ipset -q -o save list "$legacy_name" 2>/dev/null | awk '/^add/ {print $3}'
+	nft list set inet fw4 "omr_dscp_${class}_${fam}" 2>/dev/null \
+		| sed -n 's/.*elements = { *\(.*[^ ]\) *}.*/\1/p' \
+		| tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$'
+}
+
+_get_dscp_classify_entries() {
+	local class="$1" cidr
+	for cidr in $(_get_dscp_class_members "$class" 4) $(_get_dscp_class_members "$class" 6); do
+		[ -n "$dscp_classify_entries" ] && dscp_classify_entries="${dscp_classify_entries},"
+		dscp_classify_entries="${dscp_classify_entries}{\"dscp\":\"${class}\",\"cidr\":\"${cidr}\"}"
+	done
+}
+
+# Pushes the router's live omr-dscp/omr-dscp-nft classification (which
+# destination IPs are currently resolved into which DSCP class, e.g. by
+# domain lists such as config/dscp's `config domains` and
+# videochatipv4.list/videochatipv6.list) to the VPS, so the VPS's own
+# outbound traffic to those same destinations -- e.g. ssserver's connection
+# on behalf of a proxied session, see shadowsocks-rust's
+# 002-add-dynamic-per-connection-dscp-reflection.patch for the router-side
+# half of this -- can be marked with the same DSCP via a mirrored
+# ipset+mangle rule on the VPS, without ever needing the DSCP bits
+# themselves to survive the router->VPS hop on the wire.
+#
+# Unlike _set_mptcp_dscp_vps/_set_mptcp_weight_vps (a handful of pins that
+# rarely change), this table can run into hundreds of resolved IPs and
+# grows continuously as LAN devices browse to newly-resolved destinations,
+# so on top of the same "skip if unchanged" cache this also self-throttles
+# to at most one real attempt (enumerating up to 9 classes x 2 families of
+# ipset/nft lookups, then an HTTPS round trip) per
+# DSCP_CLASSIFY_MIN_INTERVAL seconds, independent of how often the calling
+# hook itself fires.
+_set_dscp_classify_vps() {
+	local dscp_classify_entries="" desired class now last \
+		dscp_classify_cache="/tmp/.dscp_classify_vps-${servername}" \
+		dscp_classify_ts="/tmp/.dscp_classify_vps_ts-${servername}"
+
+	now=$(date +%s)
+	last=$(cat "$dscp_classify_ts" 2>/dev/null)
+	if [ -n "$last" ] && [ $((now - last)) -lt "${DSCP_CLASSIFY_MIN_INTERVAL:-300}" ]; then
+		echo 1
+		return
+	fi
+	echo "$now" > "$dscp_classify_ts"
+
+	for class in cs0 cs1 cs2 cs3 cs4 cs5 cs6 cs7 ef; do
+		_get_dscp_classify_entries "$class"
+	done
+	desired="[${dscp_classify_entries}]"
+	if [ "$(cat "$dscp_classify_cache" 2>/dev/null)" = "$desired" ]; then
+		echo 1
+		return
+	fi
+	result=$(_set_json "dscp_classify" "{\"entries\":${desired}}")
+	if [ -n "$result" ]; then
+		echo "$desired" > "$dscp_classify_cache"
+		echo "$result"
+	fi
+}
+
+# Standalone entry point (see EXTRA_COMMANDS), same bootstrap pattern as
+# set_mptcp_dscp_vps/set_mptcp_weight_vps.
+set_dscp_classify_vps() {
+	local dcservername=$1
+	if [ -z "$dcservername" ]; then
+		config_load openmptcprouter
+		config_foreach set_dscp_classify_vps server
+		return
+	fi
+	servername=$dcservername
+	[ "$(uci -q get openmptcprouter.${servername}.disabled)" = "1" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
+	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
+	token=""
+	_login
+	[ -z "$token" ] && return
+	_set_dscp_classify_vps
 }
 
 _set_vpn_vps() {
@@ -1103,7 +1798,12 @@ _get_lan_ip() {
 			if [ -z "$lanips" ]; then
 				lanips='"'${lanip}'"'
 			else
-				lanips='"'$lanips'" "'${lanip}'"'
+				# comma-separated so the /lan JSON array stays valid with
+				# more than one lan-zone interface, and so the comparison in
+				# _set_lan_ip matches jsonfilter's '"a", "b"' rendering of
+				# the stored list (issue 4361: the old '" "' concatenation
+				# made every POST /lan fail with 422 on multi-LAN setups)
+				lanips=$lanips', "'${lanip}'"'
 			fi
 		fi
 	fi
@@ -1125,14 +1825,14 @@ _set_bypass_ips() {
 	local settings
 	[ -z "$servername" ] && servername=$1
 	bypassipv4s=$(ipset -q -o save list omr_dst_bypass_srv_vpn1_4 2>/dev/null | awk '/add/ NF {print "\""$3"\""}' | tr '\n' ',' | sed 's/,$//')
-	[ -z "$bypassipvs4" ] && {
+	[ -z "$bypassipv4s" ] && {
 		bypassipv4slst=$(nft -j list set inet fw4 "omr_dst_bypass_srv_vpn1_4"  2>/dev/null)
 		[ -n "$bypassipv4slst" ] && bypassipv4s=$(echo "$bypassipv4slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
 	}
 	bypassipv6s=$(ipset -q -o save list omr6_dst_bypass_srv_vpn1_6  2>/dev/null | awk '/add/ NF {print "\""$3"\""}' | tr '\n' ',' | sed 's/,$//')
-	[ -z "$bypassipvs6" ] && {
+	[ -z "$bypassipv6s" ] && {
 		bypassipv6slst=$(nft -j list set inet fw4 "omr_dst_bypass_srv_vpn1_6"  2>/dev/null)
-		[ -n "$bypassipv6slst" ] && bypassipv6s=$(echo "$bypassipv4slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
+		[ -n "$bypassipv6slst" ] && bypassipv6s=$(echo "$bypassipv6slst" | jsonfilter -q -e @.nftables[1].set.elem[*].prefix | awk '{gsub(/"/,"",$3);gsub(/,/,"/",$3); print $3 $5}')
 	}
 	# "
 	if [ "$bypassipv4s" != "" ] || [ "$bypassipv6s" != "" ]; then
@@ -1218,7 +1918,7 @@ _set_client2client() {
 }
 
 _vps_firewall_redirect_port() {
-	local src proto src_dport section
+	local src proto src_dport section sectype
 	section=$1
 	config_get src $1 src
 	config_get proto $1 proto "tcp udp"
@@ -1232,7 +1932,17 @@ _vps_firewall_redirect_port() {
 	config_get v2ray $1 v2ray "0"
 	config_get name $1 name
 	config_get dmz $1 dmz "0"
-	config_get target $1 target "REDIRECT"
+	config_get sectype $1 TYPE
+	config_get target $1 target ""
+	if [ -z "$target" ]; then
+		# Mirror fw4: a redirect without an explicit target is a DNAT, while
+		# a rule without target has no verdict at all (fw4 renders a bare
+		# counter, issue #4365) -- nothing to open on the VPS, and pushing it
+		# as fwtype "REDIRECT" every pass only spammed the API with entries
+		# the server ignores.
+		[ "$sectype" = "rule" ] && return
+		target="DNAT"
+	fi
 	[ "$target" = "MARK" ] && return
 	[ "$target" = "DSCP" ] && return
 	if [ -z "$src_dport" ] && [ -n "$dest_port" ]; then
@@ -1263,7 +1973,14 @@ _vps_firewall_redirect_port() {
 				checkfw=""
 				if [ "$family" = "ipv4" ]; then
 					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username redirect router $src_dport port $protoi")
+						# ACCEPT rules are listed by the VPS as "open router" lines;
+						# grepping for a "redirect router" line here (as before) never
+						# matched, so every pass re-issued shorewallopen for them.
+						if [ "$target" = "ACCEPT" ]; then
+							checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi")
+						else
+							checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username redirect router $src_dport port $protoi")
+						fi
 					else
 						comment=""
 						[ -n "$src_dip" ] && {
@@ -1355,83 +2072,94 @@ _vps_firewall_redirect_port() {
 					fi
 				fi
 			else
-				checkfw=""
-				if [ "$family" = "ipv4" ]; then
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- XRay to ${dest_ip}:${dest_port}")
+				# Always (re)issue shorewallopen + v2rayredirect/xrayredirect for
+				# the active family instead of gating on a "does a shorewall
+				# line already mention this family" text match: v2ray_add_port/
+				# xray_add_port on the VPS are already idempotent (they key off
+				# the inbound tag and no-op if it exists), and the previous
+				# text-match gate went stale as soon as a proxy-family switch
+				# left old comment text behind (see the resulting nft errors
+				# below this loop and the cross-family unredirect a few lines
+				# down) -- a stale match then wrongly skipped re-adding the
+				# redirect for the now-active family, silently breaking the
+				# forward instead of healing it.
+				if [ "$family" = "ipv4" ] && [ -n "$src_dip" ]; then
+					if [ ! -f /usr/sbin/nft ]; then
+						$IPTABLESSAVE --counters | sed "s:-d $src_dip/32::g" | $IPTABLESRESTORE -w
 					else
-						comment=""
-						[ -n "$src_dip" ] && {
-							comment=" to $src_dip"
-							if [ ! -f /usr/sbin/nft ]; then
-								$IPTABLESSAVE --counters | sed "s:-d $src_dip/32::g" | $IPTABLESRESTORE -w
-							else
-								rule=$(nft -a list table inet fw4 | grep -m1 "ip daddr $src_dip")
-								[ -n "$rule" ] && {
-									handle=$(echo $rule | awk '{ print $NF }')
-									nft replace rule inet fw4 dstnat_lan handle ${handle} $(echo $rule | awk '{ sub(" comment.*$",""); print }' | sed "s/ip daddr ${src_dip}//") 2>&1 >/dev/null
-								}
-								rule=$(nft -a list table inet fw4 | grep -m1 "ip daddr $src_dip")
-								[ -n "$rule" ] && {
-									handle=$(echo $rule | awk '{ print $NF }')
-									nft replace rule inet fw4 dstnat_vpn handle $handle $(echo $rule | awk '{ sub(" comment.*$",""); print }' | sed "s/ip daddr ${src_dip}/meta nfproto ipv4/") 2>&1 >/dev/null
-								}
-							fi
+						rule=$(nft -a list table inet fw4 | grep -m1 "ip daddr $src_dip")
+						[ -n "$rule" ] && {
+							handle=$(echo $rule | awk '{ print $NF }')
+							nft replace rule inet fw4 dstnat_lan handle ${handle} $(echo $rule | awk '{ sub(" comment.*$",""); print }' | sed "s/ip daddr ${src_dip}//") 2>&1 >/dev/null
 						}
-						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}")
-					fi
-				else
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}")
-					else
-						comment=""
-						[ -n "$src_dip" ] && comment=" to $src_dip"
-						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}")
+						rule=$(nft -a list table inet fw4 | grep -m1 "ip daddr $src_dip")
+						[ -n "$rule" ] && {
+							handle=$(echo $rule | awk '{ print $NF }')
+							nft replace rule inet fw4 dstnat_vpn handle $handle $(echo $rule | awk '{ sub(" comment.*$",""); print }' | sed "s/ip daddr ${src_dip}/meta nfproto ipv4/") 2>&1 >/dev/null
+						}
 					fi
 				fi
-				if [ "$checkfw" = "" ]; then
-					[ "$v2ray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "V2Ray to '${dest_ip}':'${dest_port}'"}'
-					[ "$xray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "XRay to '${dest_ip}':'${dest_port}'"}'
-					result=$(_set_json "shorewallopen" "$settings")
-					[ -z "$dest_port" ] && dest_port="$src_dport"
-					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","destip" : "'$dest_ip'","destport" : "'$dest_port'","proto" : "'${protoi}'"}'
-					[ "$v2ray" = "1" ] && result=$(_set_json "v2rayredirect" "$settings")
-					[ "$xray" = "1" ] && result=$(_set_json "xrayredirect" "$settings")
-				fi
+				[ "$v2ray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "V2Ray to '${dest_ip}':'${dest_port}'"}'
+				[ "$xray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "XRay to '${dest_ip}':'${dest_port}'"}'
+				result=$(_set_json "shorewallopen" "$settings")
+				[ -z "$dest_port" ] && dest_port="$src_dport"
+				settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","destip" : "'$dest_ip'","destport" : "'$dest_port'","proto" : "'${protoi}'"}'
+				[ "$v2ray" = "1" ] && result=$(_set_json "v2rayredirect" "$settings")
+				[ "$xray" = "1" ] && result=$(_set_json "xrayredirect" "$settings")
+				# A forwarded port can only be safely bound to one proxy
+				# family's dokodemo-door inbound at a time: the VPS runs
+				# v2ray and xray simultaneously, so a stale redirect left on
+				# the other family after a proxy switch competes for the same
+				# port (SO_REUSEPORT) and randomly blackholes connections
+				# that land on the family with no live reverse bridge.
+				# Explicitly tear down the other family's redirect for this
+				# exact port+destination every pass, not just when (re)adding
+				# our own -- otherwise a stale entry left from before this
+				# script gained cross-family cleanup (or from a run that hit
+				# this same race) never gets closed.
+				settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","destip" : "'$dest_ip'","destport" : "'$dest_port'","proto" : "'${protoi}'"}'
+				[ "$v2ray" = "1" ] && result=$(_set_json "xrayunredirect" "$settings")
+				[ "$xray" = "1" ] && result=$(_set_json "v2rayunredirect" "$settings")
+				# Strip both the V2Ray- and XRay-tagged variant of this rule from
+				# the stale-entry list unconditionally (not just the currently
+				# active family's). A proxy-family switch rewrites the shorewall
+				# comment to the new family without going through this cleanup
+				# for the old one, so the old family's line otherwise survives
+				# into _vps_firewall_close_port below. Since v2ray_del_port/
+				# xray_del_port on the VPS key their delete purely off
+				# proto+port+destip:destport (not family), that stale close call
+				# then deletes the redirect this same pass just (re)created —
+				# the port-forward would appear to "randomly" stop working after
+				# switching proxy family on the same forwarded port (issue #4315
+				# follow-up).
 				if [ "$family" = "ipv4" ]; then
 					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
+						vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+						vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
 					else
 						comment=""
 						[ -n "$src_dip" ] && comment=" to $src_dip"
 						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
+						vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+						vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
 					fi
 				else
 					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
+						vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+						vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
 					else
 						[ -n "$src_dip" ] && comment=" to $src_dip"
 						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
+						vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+						vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+						[ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
 					fi
 				fi
 			fi
@@ -1625,7 +2353,16 @@ _set_ssrust_server() {
 	elif [ "$value" = "false" ]; then
 		value=0
 	fi
-	if [ "$(echo $1 | grep omr)" != "" ] || [ "$(echo $1 | grep sss)" ]; then 
+	# sss1 is the dedicated IPv6 proxy slot (see the wizard's dual-stack
+	# setup): its "server" address comes from the wizard's IPv6 entry, not
+	# from this v4-preferred $vpsip sync, so leave that one option alone
+	# here -- otherwise every VPS-config refresh would clobber it back to
+	# the IPv4 address. Other options (password, method, ...) still apply
+	# to it uniformly like every other server section.
+	if [ "$1" = "sss1" ] && [ "$option" = "server" ]; then
+		return
+	fi
+	if [ "$(echo $1 | grep omr)" != "" ] || [ "$(echo $1 | grep sss)" ]; then
 		uci -q set shadowsocks-rust.$1.$option=$value
 	fi
 }
@@ -1650,7 +2387,7 @@ _set_openvpn_server() {
 
 
 _set_config_from_vps() {
-	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect mlvpn_key openvpn_key dsvpn_key
+	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect mlvpn_key openvpn_key dsvpn_key mqvpn_key mqvpn_port mqvpn_user mqvpn_cc mqvpn_scheduler mqvpn_fec_enable_raw mqvpn_fec_enable mqvpn_fec_scheme mqvpn_reinjection_control_raw mqvpn_reinjection_control mqvpn_reinjection_mode mqvpn_reorder_enabled_raw mqvpn_reorder_enabled mqvpn_reorder_max_wait_ms mqvpn_reorder_cap_packets mqvpn_reorder_rules_json mqvpn_rule_idx mqvpn_rule_proto mqvpn_rule_port mqvpn_rule_profile proxy_before
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
 
@@ -1675,10 +2412,15 @@ _set_config_from_vps() {
 	fi
 
 	ula="$(echo "$vps_config" | jsonfilter -q -e '@.ip6in4.ula')"
-	if [ -n "$ula" ] && [[ "$ula" != *" "* ]]; then
-		uci -q batch <<-EOF >/dev/null
-		set network.globals.ula_prefix=$ula
-		EOF
+	if [ -n "$ula" ]; then
+		case "$ula" in
+			*" "*) ;;
+			*)
+				uci -q batch <<-EOF >/dev/null
+				set network.globals.ula_prefix=$ula
+				EOF
+			;;
+		esac
 	fi
 
 	# Set current VPN
@@ -1696,6 +2438,7 @@ _set_config_from_vps() {
 	# Set current Proxy
 	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
 	if [ -z "$current_proxy" ] || ([ -n "$vps_lastchange" ] && [ "$vps_lastchange" -gt "$lastchange" ]) || [ "$user_permission" = "ro" ]; then
+		proxy_before="$current_proxy"
 		current_proxy="$(echo "$vps_config" | jsonfilter -q -e '@.proxy.current')"
 		if [ -n "$current_proxy" ]; then
 			uci -q batch <<-EOF >/dev/null
@@ -1768,6 +2511,13 @@ _set_config_from_vps() {
 					commit openmptcprouter
 				EOF
 			fi
+			# omr-tracker only reconciles which per-proxy watchdog instances
+			# are running when it (re)starts. Without this, switching the
+			# active proxy here (the VPS-poll path, as opposed to the local
+			# wizard Save & Apply path which already restarts omr-tracker)
+			# leaves the old proxy's tracker process orphaned, endlessly
+			# trying to restart a proxy that was intentionally disabled.
+			[ "$proxy_before" != "$current_proxy" ] && /etc/init.d/omr-tracker restart >/dev/null 2>&1
 		fi
 	fi
 
@@ -1820,9 +2570,7 @@ _set_config_from_vps() {
 		config_foreach _set_ss_server server "obfs_plugin" $ss_obfs_plugin
 		config_foreach _set_ss_server server "obfs_type" $ss_obfs_type
 		config_foreach _set_ss_server server "obfs_host" $ss_obfs_host
-		if [ "$(uci -q get shadowsocks-libev.sss0.server)" != "127.0.0.1" ]; then
-			config_foreach _set_ss_server server "server" $vpsip
-		fi
+		config_foreach _set_ss_server server "server" $vpsip
 		if [ -n "$(uci -q changes shadowsocks-libev)" ]; then
 			uci -q commit shadowsocks-libev
 			if [ "$(uci -q get shadowsocks-libev.sss0.disabled)" != "1" ]; then
@@ -1851,11 +2599,16 @@ _set_config_from_vps() {
 			set shadowsocks-rust.sss0.server_port=$ss_port
 			set shadowsocks-rust.sss0.method=$ss_method
 		EOF
+		# sss1 (the IPv6 slot) is the same VPS on the same port; keep it in
+		# sync too, but only once it actually has an address of its own --
+		# otherwise this would be the only place a bare "server_port" ever
+		# gets set on a still-unconfigured sss1.
+		if [ -n "$(uci -q get shadowsocks-rust.sss1.server)" ]; then
+			uci -q set shadowsocks-rust.sss1.server_port=$ss_port
+		fi
 		config_foreach _set_ssrust_server server "password" $ssgo_sskey
 		config_foreach _set_ssrust_server server "method" $ss_method
-		if [ "$(uci -q get shadowsocks-rust.sss0.server)" != "127.0.0.1" ]; then
-			config_foreach _set_ssrust_server server "server" $vpsip
-		fi
+		config_foreach _set_ssrust_server server "server" $vpsip
 		if [ -n "$(uci -q changes shadowsocks-rust)" ]; then
 			uci -q commit shadowsocks-rust
 			if [ "$(uci -q get shadowsocks-rust.sss0.disabled)" != "1" ]; then
@@ -1883,12 +2636,10 @@ _set_config_from_vps() {
 			set v2ray.omrout.s_vless_user_id="$v2ray_key"
 			set v2ray.omrout.s_vless_port="$v2ray_port"
 		EOF
-		if [ "$(uci -q get v2ray.omrout.s_vmess_address)" != "127.0.0.1" ]; then
-			uci -q set v2ray.omrout.s_vmess_address="$vpsip"
-			uci -q set v2ray.omrout.s_vless_address="$vpsip"
-			uci -q set v2ray.omrout.s_trojan_address="$vpsip"
-			uci -q set v2ray.omrout.s_socks_address="$vpsip"
-		fi
+		uci -q set v2ray.omrout.s_vmess_address="$vpsip"
+		uci -q set v2ray.omrout.s_vless_address="$vpsip"
+		uci -q set v2ray.omrout.s_trojan_address="$vpsip"
+		uci -q set v2ray.omrout.s_socks_address="$vpsip"
 		if [ -n "$(uci -q changes v2ray)" ]; then
 			uci -q commit v2ray
 			if [ "$(uci -q get v2ray.main.enabled)" = "1" ]; then
@@ -1905,9 +2656,11 @@ _set_config_from_vps() {
 	xray_key="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
 	xray_sskey="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.sskey')"
 	xray_vless_reality_key="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.vless_reality_key')"
+	xray_reverse_key="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.reverse_key')"
+	xray_transport="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.transport')"
 	#v2ray_port="$(echo "$vps_config" | jsonfilter -q -e '@.v2ray.config.port')"
 	xray_port="65248"
-	if [ -n "$(uci -q get xray.omr)" ] && ( ([ -n "$xray_key" ] && [ "$xray_key" != "$(uci -q get xray.omrout.s_vmess_user_id)" ]) || ([ -n "$xray_port" ] && [ "$xray_port" != "$(uci -q get xray.omrout.s_vmess.port)" ]) ); then
+	if [ -n "$(uci -q get xray.omr)" ] && ( ([ -n "$xray_key" ] && [ "$xray_key" != "$(uci -q get xray.omrout.s_vmess_user_id)" ]) || ([ -n "$xray_port" ] && [ "$xray_port" != "$(uci -q get xray.omrout.s_vmess.port)" ]) || ([ -n "$xray_transport" ] && [ "$xray_transport" != "$(uci -q get xray.omrout.ss_network)" ]) || ([ -n "$xray_vless_reality_key" ] && [ "$xray_vless_reality_key" != "$(uci -q get xray.omrout.s_vless_reality_public_key)" ])); then
 		uci -q batch <<-EOF >/dev/null
 			set xray.omrout.s_shadowsocks_port="$((xray_port+4))"
 			set xray.omrout.s_shadowsocks_password="$xray_sskey"
@@ -1921,16 +2674,16 @@ _set_config_from_vps() {
 			set xray.omrout.s_vless_port="$xray_port"
 			set xray.omrout.s_vless_reality_user_id="$xray_key"
 			set xray.omrout.s_vless_reality_public_key="$xray_vless_reality_key"
+			set xray.omrout.ss_network="$xray_transport"
 		EOF
+		[ -n "$xray_reverse_key" ] && uci -q set xray.omrout.s_vless_reverse_user_id="$xray_reverse_key"
 		#uci -q set xray.omrout.s_shadowsocks_password=$xray_sskey
-		if [ "$(uci -q get xray.omrout.s_vmess_address)" != "127.0.0.1" ]; then
-			uci -q set xray.omrout.s_vmess_address="$vpsip"
-			uci -q set xray.omrout.s_vless_address="$vpsip"
-			uci -q set xray.omrout.s_vless_reality_address="$vpsip"
-			uci -q set xray.omrout.s_trojan_address="$vpsip"
-			uci -q set xray.omrout.s_socks_address="$vpsip"
-			uci -q set xray.omrout.s_shadowsocks_address="$vpsip"
-		fi
+		uci -q set xray.omrout.s_vmess_address="$vpsip"
+		uci -q set xray.omrout.s_vless_address="$vpsip"
+		uci -q set xray.omrout.s_vless_reality_address="$vpsip"
+		uci -q set xray.omrout.s_trojan_address="$vpsip"
+		uci -q set xray.omrout.s_socks_address="$vpsip"
+		uci -q set xray.omrout.s_shadowsocks_address="$vpsip"
 		if [ -n "$(uci -q changes xray)" ]; then
 			uci -q commit xray
 			if [ "$(uci -q get xray.main.enabled)" = "1" ]; then
@@ -1946,7 +2699,7 @@ _set_config_from_vps() {
 	# Glorytun settings
 	glorytun_key="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.key')"
 	glorytun_port="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.port')"
-	if [ -n "$(uci -q get glorytun.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun.vpn.key)" ]) || ([ -n "$glorytun_port" ] || [ "$glorytun_port" != "$(uci -q get glorytun.vpn.port)" ]) ); then
+	if [ -n "$(uci -q get glorytun.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun.vpn.key)" ]) || ([ -n "$glorytun_port" ] && [ "$glorytun_port" != "$(uci -q get glorytun.vpn.port)" ]) ); then
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		glorytun_state=0
 		if [ "$vpn" = "glorytun_tcp" ]; then
@@ -1954,7 +2707,7 @@ _set_config_from_vps() {
 		fi
 		[ -z "$glorytun_port" ] && glorytun_port="65001"
 		glorytun_chacha="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.chacha')"
-		[ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ] && glorytun_chacha=1
+		{ [ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ]; } && glorytun_chacha=1
 		[ "$glorytun_chacha" = "false" ] && glorytun_chacha=0
 		uci -q batch <<-EOF >/dev/null
 			set glorytun.vpn.port=$glorytun_port
@@ -1962,7 +2715,7 @@ _set_config_from_vps() {
 			set glorytun.vpn.enable=$glorytun_state
 			set glorytun.vpn.chacha20=$glorytun_chacha
 		EOF
-		if [ "$(uci -q get glorytun.vpn.host)" != "127.0.0.1" ]; then
+		if [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ]; then
 			uci -q set glorytun.vpn.host="$vpsip"
 		fi
 		if [ -n "$(uci -q changes glorytun)" ]; then
@@ -1971,7 +2724,7 @@ _set_config_from_vps() {
 			/etc/init.d/glorytun restart >/dev/null 2>&1
 		fi
 	fi
-	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun-udp.vpn.key)" ]) || ([ -n "$glorytun_port" ] || [ "$glorytun_port" != "$(uci -q get glorytun-udp.vpn.port)" ]) ); then
+	if [ -n "$(uci -q get glorytun-udp.vpn)" ] && ( ([ -n "$glorytun_key" ] && [ "$glorytun_key" != "$(uci -q get glorytun-udp.vpn.key)" ]) || ([ -n "$glorytun_port" ] && [ "$glorytun_port" != "$(uci -q get glorytun-udp.vpn.port)" ]) ); then
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		glorytun_state=0
 		if [ "$vpn" = "glorytun_udp" ]; then
@@ -1979,7 +2732,7 @@ _set_config_from_vps() {
 		fi
 		[ -z "$glorytun_port" ] && glorytun_port="65001"
 		glorytun_chacha="$(echo "$vps_config" | jsonfilter -q -e '@.glorytun.chacha')"
-		[ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ] && glorytun_chacha=1
+		{ [ -z "$glorytun_chacha" ] || [ "$glorytun_chacha" = "true" ]; } && glorytun_chacha=1
 		[ "$glorytun_chacha" = "false" ] && glorytun_chacha=0
 		uci -q batch <<-EOF >/dev/null
 			set glorytun-udp.vpn.port=$glorytun_port
@@ -1987,7 +2740,7 @@ _set_config_from_vps() {
 			set glorytun-udp.vpn.enable=$glorytun_state
 			set glorytun-udp.vpn.chacha=$glorytun_chacha
 		EOF
-		if [ "$(uci -q get glorytun-udp.vpn.host)" != "127.0.0.1" ]; then
+		if [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ]; then
 			uci -q set glorytun-udp.vpn.host="$vpsip"
 		fi
 		if [ -n "$(uci -q changes glorytun-udp)" ]; then
@@ -2027,10 +2780,8 @@ _set_config_from_vps() {
 		#else
 		#	uci -q del openvpn.omr.enabled
 		#fi
-		if [ "$(uci -q get openvpn.omr.remote)" != "127.0.0.1" ]; then
-			config_foreach _set_openvpn_server openvpn "remote" "$vpsip"
-			#uci -q set openvpn.omr.remote="$vpsip"
-		fi
+		config_foreach _set_openvpn_server openvpn "remote" "$vpsip"
+		#uci -q set openvpn.omr.remote="$vpsip"
 		if [ -n "$(uci -q changes openvpn)" ]; then
 			uci -q commit openvpn
 			if [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
@@ -2051,7 +2802,7 @@ _set_config_from_vps() {
 	[ -n "$openvpn_client_ca" ] && {
 		echo $openvpn_client_ca | base64 -d > /etc/luci-uploads/ca.crt
 	}
-	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_crt" ] && [ -n "$openvpn_client_ca" ] && {
+	[ -n "$openvpn_client_key" ] && [ -n "$openvpn_client_ca" ] && {
 		openvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.openvpn.port')"
 		[ -z "$openvpn_port" ] && openvpn_port="65001"
 		vpn="$(uci -q get openmptcprouter.settings.vpn)"
@@ -2074,7 +2825,7 @@ _set_config_from_vps() {
 			config_foreach _set_openvpn_server openvpn "enabled" "$openvpn_state"
 		fi
 		config_foreach _set_openvpn_server openvpn "key" "/etc/luci-uploads/client.key"
-		config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
+		[ -n "$openvpn_client_crt" ] && config_foreach _set_openvpn_server openvpn "cert" "/etc/luci-uploads/client.crt"
 		config_foreach _set_openvpn_server openvpn "ca" "/etc/luci-uploads/ca.crt"
 		config_foreach _set_openvpn_server openvpn "tls_client" "1"
 		config_foreach _set_openvpn_server openvpn "client" "1"
@@ -2090,10 +2841,8 @@ _set_config_from_vps() {
 		#	set openvpn.omr.client=1
 		#	set openvpn.omr.allow_recursive_routing=1
 		#EOF
-		if [ "$(uci -q get openvpn.omr.remote)" != "127.0.0.1" ]; then
-			config_foreach _set_openvpn_server openvpn "remote" "$vpsip"
-			#uci -q set openvpn.omr.remote="$vpsip"
-		fi
+		config_foreach _set_openvpn_server openvpn "remote" "$vpsip"
+		#uci -q set openvpn.omr.remote="$vpsip"
 		if [ -n "$(uci -q changes openvpn)" ]; then
 			uci -q commit openvpn
 			if [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
@@ -2116,9 +2865,7 @@ _set_config_from_vps() {
 			set mlvpn.general.enable=$mlvpn_state
 			commit mlvpn
 		EOF
-		if [ "$(uci -q get mlvpn.general.host)" != "127.0.0.1" ]; then
-			uci -q set mlvpn.general.host="$vpsip"
-		fi
+		uci -q set mlvpn.general.host="$vpsip"
 		if [ -n "$(uci -q changes mlvpn)" ]; then
 			uci -q commit mlvpn
 			logger -t "OMR-VPS" "MLVPN restart..."
@@ -2131,6 +2878,7 @@ _set_config_from_vps() {
 	dsvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.port')"
 	if [ -f /etc/init.d/dsvpn ] && [ -n "$(uci -q get dsvpn.vpn)" ] && ( ([ -n "$dsvpn_key" ] && [ "$dsvpn_key" != "$(uci -q get dsvpn.vpn.key)" ]) || ([ -n "$dsvpn_port" ] && [ "$dsvpn_port" != "$(uci -q get dsvpn.vpn.port)" ]) ); then
 		dsvpn_state=0
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
 		if [ "$vpn" = "dsvpn" ]; then
 			dsvpn_state=1
 		fi
@@ -2140,9 +2888,7 @@ _set_config_from_vps() {
 			set dsvpn.vpn.port=$dsvpn_port
 			commit dsvpn
 		EOF
-		if [ "$(uci -q get dsvpn.vpn.host)" != "127.0.0.1" ]; then
-			uci -q set dsvpn.vpn.host="$vpsip"
-		fi
+		uci -q set dsvpn.vpn.host="$vpsip"
 		if [ -n "$(uci -q changes dsvpn)" ]; then
 			uci -q commit dsvpn
 			logger -t "OMR-VPS" "DSVPN restart..."
@@ -2150,13 +2896,97 @@ _set_config_from_vps() {
 		fi
 	fi
 
+	# MQVPN settings
+	mqvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.key')"
+	mqvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	[ -z "$mqvpn_port" ] && mqvpn_port="65443"
+	# mqvpn.server.port is user intent (pushed to the VPS by _set_mqvpn_vps):
+	# only default it from the VPS when not set locally
+	[ -n "$(uci -q get mqvpn.server.port)" ] && mqvpn_port="$(uci -q get mqvpn.server.port)"
+	mqvpn_cc="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.cc')"
+	mqvpn_scheduler="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.scheduler')"
+	mqvpn_fec_enable_raw="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.fec_enable')"
+	mqvpn_fec_scheme="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.fec_scheme')"
+	mqvpn_reinjection_control_raw="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reinjection_control')"
+	mqvpn_reinjection_mode="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reinjection_mode')"
+	mqvpn_reorder_enabled_raw="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reorder.enabled')"
+	mqvpn_reorder_max_wait_ms="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reorder.max_wait_ms')"
+	mqvpn_reorder_cap_packets="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reorder.cap_packets')"
+	mqvpn_reorder_rules_json="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.reorder_rules')"
+	[ "$mqvpn_fec_enable_raw" = "true" ] && mqvpn_fec_enable="1" || mqvpn_fec_enable="0"
+	[ "$mqvpn_reinjection_control_raw" = "true" ] && mqvpn_reinjection_control="1" || mqvpn_reinjection_control="0"
+	case "$mqvpn_reorder_enabled_raw" in
+		on|auto) mqvpn_reorder_enabled="1" ;;
+		off) mqvpn_reorder_enabled="0" ;;
+		*) mqvpn_reorder_enabled="" ;;
+	esac
+	mqvpn_user="$(uci -q get openmptcprouter.${servername}.username)"
+	if [ -f /etc/init.d/mqvpn ] && [ -n "$(uci -q get mqvpn.auth)" ] && [ -n "$mqvpn_key" ] && \
+	   ( [ "$mqvpn_key" != "$(uci -q get mqvpn.auth.key)" ] || \
+	     [ "$mqvpn_user" != "$(uci -q get mqvpn.auth.user)" ] || \
+	     [ "$(uci -q get mqvpn.server.ip)" != "$vpsip" ] || \
+	     [ "$(uci -q get mqvpn.server.port)" != "$mqvpn_port" ] || \
+	     [ "$(uci -q get mqvpn.server.insecure)" != "1" ] || \
+	     ( [ -n "$mqvpn_cc" ] && [ "$mqvpn_cc" != "$(uci -q get mqvpn.multipath.cc)" ] ) || \
+	     ( [ -n "$mqvpn_scheduler" ] && [ "$mqvpn_scheduler" != "$(uci -q get mqvpn.multipath.scheduler)" ] ) || \
+	     ( [ -n "$mqvpn_fec_enable_raw" ] && [ "$mqvpn_fec_enable" != "$(uci -q get mqvpn.multipath.fec_enable)" ] ) || \
+	     ( [ -n "$mqvpn_fec_scheme" ] && [ "$mqvpn_fec_scheme" != "$(uci -q get mqvpn.multipath.fec_scheme)" ] ) || \
+	     ( [ -n "$mqvpn_reinjection_control_raw" ] && [ "$mqvpn_reinjection_control" != "$(uci -q get mqvpn.multipath.reinjection_control)" ] ) || \
+	     ( [ -n "$mqvpn_reinjection_mode" ] && [ "$mqvpn_reinjection_mode" != "$(uci -q get mqvpn.multipath.reinjection_mode)" ] ) || \
+	     ( [ -n "$mqvpn_reorder_enabled" ] && [ "$mqvpn_reorder_enabled" != "$(uci -q get mqvpn.reorder.enabled)" ] ) || \
+	     ( [ "$(uci -q get openmptcprouter.settings.vpn)" = "mqvpn" ] && [ "$(uci -q get mqvpn.settings.enable)" != "1" ] ) ); then
+		mqvpn_state=0
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
+		if [ "$vpn" = "mqvpn" ]; then
+			mqvpn_state=1
+		fi
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.auth.key=$mqvpn_key
+			set mqvpn.auth.user=$mqvpn_user
+			set mqvpn.settings.enable=$mqvpn_state
+			set mqvpn.server.ip="$vpsip"
+			set mqvpn.server.port="$mqvpn_port"
+			set mqvpn.server.insecure=1
+			$([ -n "$mqvpn_cc" ] && echo "set mqvpn.multipath.cc=$mqvpn_cc")
+			$([ -n "$mqvpn_scheduler" ] && echo "set mqvpn.multipath.scheduler=$mqvpn_scheduler")
+			$([ -n "$mqvpn_fec_enable_raw" ] && echo "set mqvpn.multipath.fec_enable=$mqvpn_fec_enable")
+			$([ -n "$mqvpn_fec_scheme" ] && echo "set mqvpn.multipath.fec_scheme=$mqvpn_fec_scheme")
+			$([ -n "$mqvpn_reinjection_control_raw" ] && echo "set mqvpn.multipath.reinjection_control=$mqvpn_reinjection_control")
+			$([ -n "$mqvpn_reinjection_mode" ] && echo "set mqvpn.multipath.reinjection_mode=$mqvpn_reinjection_mode")
+			$([ -n "$mqvpn_reorder_enabled" ] && echo "set mqvpn.reorder.enabled=$mqvpn_reorder_enabled")
+			$([ -n "$mqvpn_reorder_max_wait_ms" ] && echo "set mqvpn.reorder.max_wait_ms=$mqvpn_reorder_max_wait_ms")
+			$([ -n "$mqvpn_reorder_cap_packets" ] && echo "set mqvpn.reorder.cap_packets=$mqvpn_reorder_cap_packets")
+		EOF
+		if [ -n "$mqvpn_reorder_rules_json" ]; then
+			while uci -q delete mqvpn.@reorder_rule[0] 2>/dev/null; do :; done
+			mqvpn_rule_idx=0
+			while true; do
+				mqvpn_rule_proto="$(echo "$vps_config" | jsonfilter -q -e "@.mqvpn.reorder_rules[$mqvpn_rule_idx].proto")"
+				[ -z "$mqvpn_rule_proto" ] && break
+				mqvpn_rule_port="$(echo "$vps_config" | jsonfilter -q -e "@.mqvpn.reorder_rules[$mqvpn_rule_idx].port")"
+				mqvpn_rule_profile="$(echo "$vps_config" | jsonfilter -q -e "@.mqvpn.reorder_rules[$mqvpn_rule_idx].profile")"
+				uci -q add mqvpn reorder_rule >/dev/null
+				uci -q set "mqvpn.@reorder_rule[-1].proto=$mqvpn_rule_proto"
+				[ -n "$mqvpn_rule_port" ] && uci -q set "mqvpn.@reorder_rule[-1].port=$mqvpn_rule_port"
+				[ -n "$mqvpn_rule_profile" ] && uci -q set "mqvpn.@reorder_rule[-1].profile=$mqvpn_rule_profile"
+				mqvpn_rule_idx=$((mqvpn_rule_idx + 1))
+			done
+		fi
+		if [ -n "$(uci -q changes mqvpn)" ]; then
+			uci -q commit mqvpn
+			logger -t "OMR-VPS" "MQVPN restart..."
+			/etc/init.d/mqvpn restart
+		fi
+	fi
+
 	# SoftEtherVPN settings
 	softethervpn_password="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.password')"
 	softethervpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.softethervpn.port')"
-	if [ -f /etc/init.d/softethervpnclient ] && [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ( ([ -n "$softethervpn_password" ] && [ "$softethervpn_password" != "$(uci -q get softethervpn.openmptcprouter.password)" ]) || ([ -n "$softhervpn_port" ] && [ "$softethervpn_port" != "$(uci -q get softethervpn.openmptcprouter.port)" ]) ); then
+	if [ -f /etc/init.d/softethervpnclient ] && [ -n "$(uci -q get softethervpn.openmptcprouter)" ] && ( ([ -n "$softethervpn_password" ] && [ "$softethervpn_password" != "$(uci -q get softethervpn.openmptcprouter.password)" ]) || ([ -n "$softethervpn_port" ] && [ "$softethervpn_port" != "$(uci -q get softethervpn.openmptcprouter.port)" ]) ); then
 		softethervpn_state=0
-		if [ "$vpn" = "softhervpn" ]; then
-			sofethersvpn_state=1
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
+		if [ "$vpn" = "softethervpn" ]; then
+			softethervpn_state=1
 		fi
 		uci -q batch <<-EOF >/dev/null
 			set softethervpn.openmptcprouter.password=$softethervpn_password
@@ -2164,9 +2994,7 @@ _set_config_from_vps() {
 			set softethervpn.openmptcprouter.port=$softethervpn_port
 			commit softethervpn
 		EOF
-		if [ "$(uci -q get softethervpn.openmptcprouter.host)" != "127.0.0.1" ]; then
-			uci -q set softethervpn.openmptcprouter.host="$vpsip"
-		fi
+		uci -q set softethervpn.openmptcprouter.host="$vpsip"
 		if [ -n "$(uci -q changes softethervpn)" ]; then
 			uci -q commit softethervpn
 			logger -t "OMR-VPS" "SoftEther VPN restart..."
@@ -2206,13 +3034,26 @@ _set_config_from_vps() {
 		set network.globals.congestion=$congestion
 		commit network
 	EOF
-	if [ "$mptcp_path_manager" != "" ] && [ "$mptcp_scheduler" != "" ] && [ "$mptcp_syn_retries" != "" ]; then
+	if [ "$mptcp_scheduler" != "" ] && [ "$mptcp_syn_retries" != "" ]; then
 		uci -q batch <<-EOF >/dev/null
-			set network.globals.mptcp_path_manager=$mptcp_path_manager
 			set network.globals.mptcp_scheduler=$mptcp_scheduler
 			set network.globals.mptcp_syn_retries=$mptcp_syn_retries
 			commit network
 		EOF
+	fi
+	if [ "$mptcp_path_manager" != "" ] && [ "$mptcp_path_manager" != "kernel" ]; then
+		uci -q set network.globals.mptcp_path_manager="$mptcp_path_manager"
+	fi
+	mptcp_close_timeout="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.close_timeout')"
+	mptcp_pm_type="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.pm_type')"
+	mptcp_stale_loss_cnt="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.stale_loss_cnt')"
+	mptcp_syn_retrans_before_tcp_fallback="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retrans_before_tcp_fallback')"
+	[ -n "$mptcp_close_timeout" ] && [ "$mptcp_close_timeout" != "0" ] && uci -q set network.globals.mptcp_close_timeout="$mptcp_close_timeout"
+	[ -n "$mptcp_pm_type" ] && [ "$mptcp_pm_type" != "0" ] && uci -q set network.globals.mptcp_pm_type="$mptcp_pm_type"
+	[ -n "$mptcp_stale_loss_cnt" ] && [ "$mptcp_stale_loss_cnt" != "0" ] && uci -q set network.globals.mptcp_stale_loss_cnt="$mptcp_stale_loss_cnt"
+	[ -n "$mptcp_syn_retrans_before_tcp_fallback" ] && [ "$mptcp_syn_retrans_before_tcp_fallback" != "0" ] && uci -q set network.globals.mptcp_syn_retrans_before_tcp_fallback="$mptcp_syn_retrans_before_tcp_fallback"
+	if [ -n "$(uci -q changes network)" ]; then
+		uci -q commit network
 	fi
 
 	# Check if server get an IPv6, if not disable IPv6 on OMR
@@ -2253,7 +3094,7 @@ _set_config_from_vps() {
 	uci -q batch <<-EOF >/dev/null
 		del iperf.${servername}
 		set iperf.${servername}=server
-		set iperf.${servername}.host=$server
+		set iperf.${servername}.host=$vpsip
 		set iperf.${servername}.ports=65400
 		set iperf.${servername}.ipv4=1
 		set iperf.${servername}.ipv6=0
@@ -2307,6 +3148,7 @@ _set_config_from_vps() {
 	if [ "$noerror" = "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set openmptcprouter.${servername}.get_config=0
+			delete openmptcprouter.settings.forceretrieve
 			commit openmptcprouter
 		EOF
 	fi
@@ -2522,6 +3364,13 @@ _config_service() {
 			return
 		fi
 	fi
+	# "Force retrieve settings" in the wizard (and the post-upgrade
+	# zzzzz-omr-update uci-default) only raise a global flag: turn it into a
+	# real get_config for the server we actually talk to. Restricted to
+	# master/current because get_config is never cleared on the other servers,
+	# and a lingering one keeps omr-tracker's "get_config='1'" check true and
+	# reruns this service on every tracker cycle.
+	[ "$(uci -q get openmptcprouter.settings.forceretrieve)" = "1" ] && { [ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]; } && uci -q set openmptcprouter.${servername}.get_config=1
 	[ "$(uci -q get openmptcprouter.${servername}.get_config)" = "1" ] && ([ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]) && {
 		_set_config_from_vps
 		_get_gre_tunnel
@@ -2575,6 +3424,7 @@ _config_service() {
 		([ -n "$(uci -q get glorytun.vpn)" ] || [ -n "$(uci -q get glorytun-udp.vpn)" ]) && [ -z "$(_set_glorytun_vps)" ] && error=1
 		[ -n "$(uci -q get openvpn.omr)" ] && [ -z "$(_set_openvpn_vps)" ] && error=1
 		[ -n "$(uci -q get mlvpn.general)" ] && [ -z "$(_set_mlvpn_vps)" ] && error=1
+		[ -n "$(uci -q get mqvpn.server)" ] && [ -z "$(_set_mqvpn_vps)" ] && error=1
 		[ -n "$(uci -q get softethervpn.openmptcprouter)" ] && [ -z "$(_set_softethervpn_vps)" ] && error=1
 		_set_vps_firewall
 		[ -n "$(uci -q show network | grep wireguard)" ] && [ -z "$(_set_wireguard_vps)" ] && error=1
@@ -2595,6 +3445,10 @@ _config_service() {
 	#_set_pihole
 	[ -n "$wanips" ] && _set_wan_ip
 	_set_vpn_ip
+	([ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]) && {
+		[ "$user_permission" != "ro" ] && _set_vxlan_vps
+		_get_vxlan
+	}
 	config_load network
 	lanips=""
 	config_foreach _get_lan_ip interface
@@ -2674,7 +3528,7 @@ start_service() {
 
 service_triggers() {
 	#procd_add_reload_trigger openmptcprouter network shadowsocks-libev v2ray glorytun glorytun-udp mlvpn openvpn dsvpn
-	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn
+	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn mqvpn
 	procd_add_config_trigger "config.change" "firewall" /etc/init.d/openmptcprouter-vps set_vps_firewall
 	#procd_add_config_trigger "config.change" "network" /etc/init.d/openmptcprouter-vps set_gre_tunnel
 	#procd_add_reload_trigger openmptcprouter shadowsocks-libev network upnpd

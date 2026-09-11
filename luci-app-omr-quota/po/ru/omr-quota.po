@@ -1,62 +1,240 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2021-06-16 10:51+0000\n"
+"Project-Id-Version: luci-app-omr-quota\n"
+"POT-Creation-Date: 2026-07-29 00:00+0000\n"
+"PO-Revision-Date: 2026-07-07 00:00+0000\n"
 "Last-Translator: Dmitry Galenko <d@monteops.com>\n"
-"Language-Team: Russian <http://weblate.openmptcprouter.com/projects/omr/"
-"luciapplicationsomr-quota/ru/>\n"
+"Language-Team: Russian\n"
 "Language: ru\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Plural-Forms: nplurals=3; plural=n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
-"%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
-"X-Generator: Weblate 4.6.1\n"
+"Plural-Forms: nplurals=3; plural=n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
 
-#: luci-app-omr-quota/luasrc/view/omr-quota/cbi-select-add.htm:8
-msgid "Add"
-msgstr "Добавить"
-
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:21
-msgid "Enable"
-msgstr "Включено"
-
-#: luci-app-omr-quota/root/usr/share/rpcd/acl.d/luci-app-omr-quota.json:3
-msgid "Grant UCI access for luci-app-omr-quota"
-msgstr "Разрешить доступ к UCI для luci-app-omr-quota"
-
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:10
-msgid "Interfaces"
-msgstr "Интерфейсы"
-
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:33
-msgid "Interval between check (s)"
-msgstr "Интервал между проверками (сек.)"
-
-#: luci-app-omr-quota/luasrc/view/omr-quota/cbi-select-add.htm:9
-msgid "Invalid"
-msgstr "Неправильный"
-
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:8
-msgid "Monthly Quota"
-msgstr "Месячная квота"
-
-#: luci-app-omr-quota/luasrc/controller/quota.lua:11
-#: luci-app-omr-quota/root/usr/share/luci/menu.d/luci-app-omr-quota.json:3
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+#: root/usr/share/luci/menu.d/luci-app-omr-quota.json
 msgid "Quota"
 msgstr "Квота"
 
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:27
-msgid "RX quota (kbit)"
-msgstr "Ограничение на прием (kbit)"
-
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:8
-msgid "Set monthly quota, when quota is reached interface state is set to down"
+#: root/usr/share/luci/menu.d/luci-app-omr-quota.json
+msgid "Settings"
 msgstr ""
-"Установить ежемесячную квоту, при достижении квоты интерфейс отключается"
 
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:24
-msgid "TX quota (kbit)"
-msgstr "Ограничение на отправку (kbit)"
+#: root/usr/share/luci/menu.d/luci-app-omr-quota.json
+msgid "Graphs"
+msgstr ""
 
-#: luci-app-omr-quota/luasrc/model/cbi/quota/quota.lua:30
-msgid "TX+RX quota (kbit)"
-msgstr "Общее размер квоты (отправка и прием в kbit)"
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Monthly Quota"
+msgstr "Месячная квота"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Set a quota per interface based only on its own traffic, or a global quota combining several interfaces. When a quota is reached, every interface it covers is cut or throttled together for the remainder of the month."
+msgstr "Задайте квоту для одного интерфейса на основе только его трафика, либо общую квоту, объединяющую несколько интерфейсов. При достижении квоты все относящиеся к ней интерфейсы отключаются или ограничиваются одновременно до конца месяца."
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Interfaces"
+msgstr "Интерфейсы"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Add interface…"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "-- select interface --"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Add"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Enable"
+msgstr "Включено"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "TX quota (KiB)"
+msgstr "Ограничение на отправку (KiB)"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "RX quota (KiB)"
+msgstr "Ограничение на прием (KiB)"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "TX+RX quota (KiB)"
+msgstr "Общий размер квоты (отправка и прием в KiB)"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Begin date"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "End date"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Interval between checks (s)"
+msgstr "Интервал между проверками (сек.)"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Daily budget method"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Disabled"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Block when the interval budget is exceeded"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Limit speed using remaining daily volume"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Budget threshold (%)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Budget calculation interval (s)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Downstream limit interfaces"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Space-separated interfaces shaped by the daily budget speed-limit method. Leave empty to use this section interface."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Action when quota is reached"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Cut — bring interface(s) down for the rest of the month"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Throttle — limit interface(s) bandwidth"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Block LAN and proxy when cut"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid ""
+"Set firewall LAN input to DROP while the quota is exceeded, blocking every "
+"transparent proxy without changing proxy service state. The router itself "
+"stays reachable from the LAN (LuCI, SSH, DNS, DHCP, ping)."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Download limit (Mbps)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Maximum download speed applied to the interface(s) when quota is exceeded"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Upload limit (Mbps)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Maximum upload speed applied to the interface(s) when quota is exceeded"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Enforcement scope"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "This month only — auto-recover when the month resets"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "All future months — keep cut/throttled until manually reset"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Reset exceeded state"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Tick and save to clear the persistent exceeded flag — the interface(s) recover on the next check interval"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Global quota"
+msgstr "Общая квота"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "A quota combining the traffic of several interfaces. When it is reached, every interface listed below is cut or throttled together."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Add global quota…"
+msgstr "Добавить общую квоту…"
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Space-separated interfaces whose combined traffic counts towards this quota. All of them are cut or throttled together when the quota is reached."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/quota.js
+msgid "Space-separated interfaces shaped by the daily budget speed-limit method. Leave empty to shape all interfaces listed above."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Remaining: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Global — %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Total (RX+TX)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Download (RX)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Upload (TX)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Exceeded"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Throttled"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Action: %s · Scope: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "No quota configured."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "No interfaces configured. Add one under Network → Quota → Settings."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Quota — Graphs"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/omr-quota/graphs.js
+msgid "Current-month usage and remaining data per interface. Refreshes every %d seconds."
+msgstr ""
+
+#: root/usr/share/rpcd/acl.d/luci-app-omr-quota.json
+msgid "Grant UCI access for luci-app-omr-quota"
+msgstr "Разрешить доступ к UCI для luci-app-omr-quota"

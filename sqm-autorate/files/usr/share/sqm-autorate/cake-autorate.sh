@@ -61,7 +61,7 @@ set -o pipefail
 export LC_ALL=C
 
 # Set PREFIX
-PREFIX=/root/cake-autorate
+PREFIX=/usr/share/sqm-autorate
 
 # shellcheck source=lib.sh
 . "${PREFIX}/lib.sh"
@@ -612,7 +612,22 @@ parse_tsping()
 
 		case "${command[0]}" in
 			REFLECTOR_RESPONSE)
-				read -r timestamp reflector seq _ _ _ _ _ dl_owd_ms ul_owd_ms checksum <<< "${command[@]:1}"
+				if (( ${#command[@]} == 6 ))
+				then
+					# tsping run in ICMP echo mode (e.g. via '-e'/'--icmp-echo' in ping_extra_args,
+					# used so that reflectors which do not answer ICMP timestamp requests can still
+					# be used) only reports a single round trip time and none of the Originate/
+					# Received/Transmit/Finished timestamps used below to derive dl/ul owd, so fall
+					# back to splitting the rtt evenly across dl and ul, exactly as parse_ping() does
+					# for the plain 'ping' binary, which is likewise rtt-only.
+					read -r timestamp reflector seq rtt_ms checksum <<< "${command[@]:1}"
+					dl_owd_ms="${rtt_ms}"
+					ul_owd_ms="${rtt_ms}"
+					icmp_echo_mode=1
+				else
+					read -r timestamp reflector seq _ _ _ _ _ dl_owd_ms ul_owd_ms checksum <<< "${command[@]:1}"
+					icmp_echo_mode=0
+				fi
 				;;
 
 			START_PINGER)
@@ -622,7 +637,7 @@ parse_tsping()
 				printf "SET_PROC_PID proc_pids %s %s\n" "${parse_id}_preprocessor" "${parse_preprocessor_pid}" >&"${main_fd}"
 				# accommodate present tsping interval/sleep handling to prevent ping flood with only one pinger
 				tsping_sleep_time=$(( no_pingers == 1 ? ping_response_interval_ms : 0 ))
-				${ping_prefix_string} tsping ${ping_extra_args} --print-timestamps --machine-readable=, --sleep-time "${tsping_sleep_time}" --target-spacing "${ping_response_interval_ms}" "${reflectors[@]:0:${no_pingers}}" 2>/dev/null >&"${parse_preprocessor_fd}" &
+					${ping_prefix_string} tsping ${ping_extra_args} --print-timestamps --machine-readable=, --sleep-time "${tsping_sleep_time}" --target-spacing "${ping_response_interval_ms}" "${reflectors[@]:0:${no_pingers}}" 1>&"${parse_preprocessor_fd}" 2>/dev/null &
 				pinger_pid="${!}"
 				printf "SET_PROC_PID proc_pids %s %s\n" "${parse_id}_pinger" "${pinger_pid}" >&"${main_fd}"
 				continue
@@ -681,8 +696,15 @@ parse_tsping()
 		[[ "${timestamp:-}" && "${reflector:-}" && "${seq:-}" && "${dl_owd_ms:-}" && "${ul_owd_ms:-}" && "${checksum:-}" ]] || continue
 		[[ "${checksum}" == "${timestamp}" ]] || continue
 
-		dl_owd_us="${dl_owd_ms}000"
-		ul_owd_us="${ul_owd_ms}000"
+		if ((icmp_echo_mode))
+		then
+			# rtt-only sample (see note above): split evenly between dl and ul
+			dl_owd_us=$(( (dl_owd_ms * 1000) / 2 ))
+			ul_owd_us="${dl_owd_us}"
+		else
+			dl_owd_us="${dl_owd_ms}000"
+			ul_owd_us="${ul_owd_ms}000"
+		fi
 
 		dl_owd_delta_us=$(( dl_owd_us - dl_owd_baselines_us[${reflector}] ))
 		ul_owd_delta_us=$(( ul_owd_us - ul_owd_baselines_us[${reflector}] ))
@@ -792,7 +814,7 @@ parse_fping()
 				exec {parse_preprocessor_fd}> >(parse_preprocessor)
 				parse_preprocessor_pid="${!}"
 				printf "SET_PROC_PID proc_pids %s %s\n" "${parse_id}_preprocessor" "${parse_preprocessor_pid}" >&"${main_fd}"
-				${ping_prefix_string} fping ${ping_extra_args} --timestamp --loop --period "${reflector_ping_interval_ms}" --interval "${ping_response_interval_ms}" --timeout 10000 "${reflectors[@]:0:${no_pingers}}" 2> /dev/null >&"${parse_preprocessor_fd}" &
+					${ping_prefix_string} fping ${ping_extra_args} --timestamp --loop --period "${reflector_ping_interval_ms}" --interval "${ping_response_interval_ms}" --timeout 10000 "${reflectors[@]:0:${no_pingers}}" 1>&"${parse_preprocessor_fd}" 2>/dev/null &
 				pinger_pid="${!}"
 				printf "SET_PROC_PID proc_pids %s %s\n" "${parse_id}_pinger" "${pinger_pid}" >&"${main_fd}"
 				continue
@@ -937,7 +959,7 @@ parse_ping()
 				exec {parse_preprocessor_fd}> >(parse_preprocessor)
 				parse_preprocessor_pid="${!}"
 				printf "SET_PROC_PID %s %s\n" "proc_pids ${parse_id}_preprocessor" "${parse_preprocessor_pid}" >&"${main_fd}"
-				${ping_prefix_string} ping ${ping_extra_args} -D -i "${reflector_ping_interval_s}" "${reflector}" 2> /dev/null >&"${parse_preprocessor_fd}" &
+					${ping_prefix_string} ping ${ping_extra_args} -D -i "${reflector_ping_interval_s}" "${reflector}" 1>&"${parse_preprocessor_fd}" 2>/dev/null &
 				pinger_pid="${!}"
 				printf "SET_PROC_PID proc_pids %s %s\n" "${parse_id}_pinger" "${pinger_pid}" >&"${main_fd}"
 				continue

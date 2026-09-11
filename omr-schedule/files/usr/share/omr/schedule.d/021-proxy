@@ -1,0 +1,233 @@
+#!/bin/sh
+#
+# Copyright (C) 2018-2025 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+# This script ensures only the proxy set in openmptcprouter.settings.proxy is enabled
+
+configured_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+if [ -z "$configured_proxy" ]; then
+	if [ "$(uci -q get v2ray.main.enabled 2>/dev/null)" = "1" ] && [ -f /etc/init.d/v2ray ]; then
+		configured_proxy="v2ray"
+	elif [ "$(uci -q get xray.main.enabled 2>/dev/null)" = "1" ] && [ -f /etc/init.d/xray ]; then
+		configured_proxy="xray"
+	elif [ "$(uci -q get shadowsocks-libev.sss0.disabled 2>/dev/null)" = "0" ] && [ -f /etc/init.d/shadowsocks-libev ]; then
+		configured_proxy="shadowsocks"
+	elif [ "$(uci -q get shadowsocks-rust.sss0.disabled 2>/dev/null)" = "0" ] && [ -f /etc/init.d/shadowsocks-rust ]; then
+		configured_proxy="shadowsocks-rust"
+	else
+		configured_proxy="none"
+	fi
+	uci -q set "openmptcprouter.settings.proxy=${configured_proxy}"
+	uci -q commit openmptcprouter
+fi
+
+case "$configured_proxy" in
+	shadowsocks)
+		ss_libev_disabled=0
+		ss_rust_disabled=1
+		v2ray_enabled=0
+		xray_enabled=0
+		ss_disable=0
+		;;
+	shadowsocks-rust|shadowsocks-go)
+		ss_libev_disabled=1
+		ss_rust_disabled=0
+		v2ray_enabled=0
+		xray_enabled=0
+		ss_disable=0
+		;;
+	v2ray|v2ray-*)
+		ss_libev_disabled=1
+		ss_rust_disabled=1
+		v2ray_enabled=1
+		xray_enabled=0
+		ss_disable=1
+		;;
+	xray|xray-*)
+		ss_libev_disabled=1
+		ss_rust_disabled=1
+		v2ray_enabled=0
+		xray_enabled=1
+		ss_disable=1
+		;;
+	none)
+		ss_libev_disabled=1
+		ss_rust_disabled=1
+		v2ray_enabled=0
+		xray_enabled=0
+		ss_disable=1
+		;;
+	*)
+		exit 0
+		;;
+esac
+
+# A secondary server section (sss1, the dedicated IPv6 slot) must never be
+# dragged up with the backend when it has no address of its own: an enabled
+# ss_redir pointed at nothing crash-loops (issue #2460), and one still
+# carrying the shipped placeholder address is worse -- it starts fine,
+# so ss_rules.redir_tcp="all" puts its port in the round-robin map and
+# black-holes its share of every new TCP connection. Enabled is not healthy.
+_ss_secondary_flag() {  # _ss_secondary_flag <package> <section> <want_flag>
+	if [ "$3" = "0" ]; then
+		case "$(uci -q get "$1.$2.server")" in
+			""|127.0.0.1|::1|192.168.1.3) echo 1; return ;;
+		esac
+	fi
+	echo "$3"
+}
+
+changed=0
+
+if [ -f /etc/init.d/shadowsocks-libev ] && [ "$(uci -q get shadowsocks-libev.sss0.disabled)" != "$ss_libev_disabled" ]; then
+	_log "Proxy enforce: setting shadowsocks-libev.sss0.disabled=${ss_libev_disabled} (configured proxy: ${configured_proxy})"
+	uci -q set shadowsocks-libev.sss0.disabled="$ss_libev_disabled"
+	uci -q set shadowsocks-libev.sss1.disabled="$(_ss_secondary_flag shadowsocks-libev sss1 "$ss_libev_disabled")"
+	uci -q commit shadowsocks-libev
+	if [ "$ss_libev_disabled" = "0" ]; then
+		if [ -n "$(uci -q get shadowsocks-libev.sss0.key)" ] && [ -n "$(uci -q get shadowsocks-libev.sss0.server)" ]; then
+			/etc/init.d/shadowsocks-libev restart >/dev/null 2>&1
+		else
+			_log "Proxy enforce: shadowsocks-libev sss0 not yet configured (missing key or server), skipping restart"
+		fi
+	else
+		/etc/init.d/shadowsocks-libev running 2>/dev/null && /etc/init.d/shadowsocks-libev stop >/dev/null 2>&1
+	fi
+	changed=1
+fi
+
+if [ -f /etc/init.d/shadowsocks-rust ] && [ "$(uci -q get shadowsocks-rust.sss0.disabled)" != "$ss_rust_disabled" ]; then
+	_log "Proxy enforce: setting shadowsocks-rust.sss0.disabled=${ss_rust_disabled} (configured proxy: ${configured_proxy})"
+	uci -q set shadowsocks-rust.sss0.disabled="$ss_rust_disabled"
+	# sss1 is the dedicated IPv6 proxy slot: only follow sss0 up to enabled
+	# when it actually has an address of its own (a real IPv6 address was
+	# set for this VPS), otherwise enabling it here would crash-loop it
+	# (issue #2460) since it'd have nothing to connect to.
+	uci -q set shadowsocks-rust.sss1.disabled="$(_ss_secondary_flag shadowsocks-rust sss1 "$ss_rust_disabled")"
+	uci -q commit shadowsocks-rust
+	if [ "$ss_rust_disabled" = "0" ]; then
+		if [ -n "$(uci -q get shadowsocks-rust.sss0.password)" ] && [ -n "$(uci -q get shadowsocks-rust.sss0.server)" ]; then
+			/etc/init.d/shadowsocks-rust restart >/dev/null 2>&1
+		else
+			_log "Proxy enforce: shadowsocks-rust sss0 not yet configured (missing password or server), skipping restart"
+		fi
+	else
+		/etc/init.d/shadowsocks-rust running 2>/dev/null && /etc/init.d/shadowsocks-rust stop >/dev/null 2>&1
+	fi
+	changed=1
+fi
+
+if [ -f /etc/init.d/v2ray ] && [ "$(uci -q get v2ray.main.enabled)" != "$v2ray_enabled" ]; then
+	_log "Proxy enforce: setting v2ray.main.enabled=${v2ray_enabled} (configured proxy: ${configured_proxy})"
+	uci -q set v2ray.main.enabled="$v2ray_enabled"
+	uci -q commit v2ray
+	if [ "$v2ray_enabled" = "1" ]; then
+		/etc/init.d/v2ray restart >/dev/null 2>&1
+	else
+		/etc/init.d/v2ray running 2>/dev/null && /etc/init.d/v2ray stop >/dev/null 2>&1
+	fi
+	changed=1
+fi
+
+if [ -f /etc/init.d/xray ] && [ "$(uci -q get xray.main.enabled)" != "$xray_enabled" ]; then
+	_log "Proxy enforce: setting xray.main.enabled=${xray_enabled} (configured proxy: ${configured_proxy})"
+	uci -q set xray.main.enabled="$xray_enabled"
+	uci -q commit xray
+	if [ "$xray_enabled" = "1" ]; then
+		/etc/init.d/xray restart >/dev/null 2>&1
+	else
+		/etc/init.d/xray running 2>/dev/null && /etc/init.d/xray stop >/dev/null 2>&1
+	fi
+	changed=1
+fi
+
+if [ "$(uci -q get openmptcprouter.settings.shadowsocks_disable)" != "$ss_disable" ]; then
+	uci -q set openmptcprouter.settings.shadowsocks_disable="$ss_disable"
+	uci -q commit openmptcprouter
+fi
+
+# Secondary-section backstop. The blocks above only fire on a *delta* of
+# sss0's flag, so an sss1 that was already committed enabled while carrying
+# the placeholder address (older builds only tested for an empty server) is
+# never healed by them. Left enabled it starts an ss_redir nothing answers
+# for, whose port then joins the redir_tcp="all" round-robin map and
+# black-holes its share of every new TCP connection. Cheap enough to re-check
+# every pass: two uci gets per backend in the steady state, no commit.
+_reconcile_secondary_server() {  # _reconcile_secondary_server <package> <section>
+	[ -f "/etc/init.d/$1" ] || return 0
+	[ -n "$(uci -q get "$1.$2")" ] || return 0
+	[ "$(uci -q get "$1.$2.disabled")" = "1" ] && return 0
+	[ "$(_ss_secondary_flag "$1" "$2" 0)" = "1" ] || return 0
+	_log "Proxy enforce: $1.$2 is enabled with no address of its own (server='$(uci -q get "$1.$2.server")'), disabling it"
+	uci -q set "$1.$2.disabled=1"
+	uci -q commit "$1"
+	/etc/init.d/$1 running >/dev/null 2>&1 && /etc/init.d/$1 restart >/dev/null 2>&1
+	changed=1
+}
+_reconcile_secondary_server shadowsocks-libev sss1
+_reconcile_secondary_server shadowsocks-rust sss1
+
+# Process-level backstop (issue #4357): the blocks above only fire on a flag
+# *delta*. A backend whose disabled flag is already correct but whose daemons
+# were left running (an older default_proxy() set the flag without stopping
+# the service) is never healed by them, and nothing else stops those orphans;
+# ss-local then keeps reconnecting to the VPS forever, spamming "Connection
+# reset by peer" on every tracker probe.
+#
+# Shadowsocks orphans are identified per instance from the -c config path so
+# a custom user section pointing at its own enabled server survives: only
+# instances tied to a disabled (or vanished) server section are cleared, via
+# a service restart -- start_service itself skips disabled instances, so the
+# restart drops the orphans and brings back only legitimate ones. Only run
+# this when the whole backend is supposed to be off: while it is the active
+# proxy, omr-tracker-ss legitimately flips ss_redir sections disabled=1
+# during an outage with the daemons still up, and sweeping then would fight
+# it every minute.
+_sweep_ss_orphans() {
+	local pkg="$1" name pid cmdline section server orphans=0
+	shift
+	[ -f "/etc/init.d/$pkg" ] || return 0
+	for name in "$@"; do
+		for pid in $(pgrep -x "$name" 2>/dev/null); do
+			cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)"
+			case "$cmdline" in
+				*"/var/etc/$pkg/"*) ;;
+				*) continue ;;
+			esac
+			section="${cmdline##*/}"
+			section="${section#*.}"
+			section="${section%%.json*}"
+			[ -n "$section" ] || continue
+			if [ -z "$(uci -q get "$pkg.$section")" ] || [ "$(uci -q get "$pkg.$section.disabled")" = "1" ]; then
+				orphans=1
+				continue
+			fi
+			server="$(uci -q get "$pkg.$section.server")"
+			[ -n "$server" ] && [ "$(uci -q get "$pkg.$server.disabled")" = "1" ] && orphans=1
+		done
+	done
+	[ "$orphans" = "1" ] || return 0
+	_log "Proxy enforce: ${pkg} instance(s) of a disabled server still running, restarting ${pkg} to clear them (configured proxy: ${configured_proxy})"
+	/etc/init.d/$pkg restart >/dev/null 2>&1
+	changed=1
+}
+
+_sweep_proxy_service() {
+	[ "$2" = "0" ] || return 0
+	[ -f "/etc/init.d/$1" ] || return 0
+	/etc/init.d/$1 running >/dev/null 2>&1 || return 0
+	_log "Proxy enforce: $1 disabled but still running, stopping it (configured proxy: ${configured_proxy})"
+	/etc/init.d/$1 stop >/dev/null 2>&1
+	changed=1
+}
+
+[ "$ss_libev_disabled" = "1" ] && _sweep_ss_orphans shadowsocks-libev ss-local ss-redir ss-tunnel ss-server
+[ "$ss_rust_disabled" = "1" ] && _sweep_ss_orphans shadowsocks-rust sslocal ssserver
+_sweep_proxy_service v2ray "$v2ray_enabled"
+_sweep_proxy_service xray "$xray_enabled"
+
+[ "$changed" = "1" ] && /etc/init.d/omr-tracker start >/dev/null 2>&1
+exit 0

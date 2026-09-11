@@ -21,7 +21,7 @@ MY_DEPENDS := \
     mc          \
     f2fs-tools \
     openmptcprouter \
-    dnsmasq-full LINUX_5_4:dnsmasq_full_ipset !LINUX_5_4:dnsmasq_full_nftset \
+    dnsmasq-full \
     uhttpd \
     uhttpd-mod-ubus \
     curl \
@@ -35,16 +35,16 @@ MY_DEPENDS := \
     !LINUX_5_4:nftables-json !LINUX_5_4:iptables-nft !LINUX_5_4:kmod-nft-connlimit !LINUX_5_4:kmod-nft-offload \
     wireless-tools \
     libiwinfo-lua \
-    ca-bundle ca-certificates \
+    ca-bundle \
     luci-mod-admin-full luci-app-firewall luci-app-glorytun-tcp luci-app-glorytun-udp luci-app-shadowsocks-libev luci-app-unbound luci-theme-openmptcprouter luci-theme-argon luci-theme-alpha luci-theme-design luci-base luci-theme-material luci-theme-bootstrap \
     luci-app-omr-tracker luci-app-omr-dscp \
-    luci-app-sqm-autorate sqm-scripts-extra \
+    luci-app-sqm-autorate \
     luci-app-vnstat2 omr-quota luci-app-omr-quota \
     luci-app-mptcp luci-app-openmptcprouter luci-app-omr-bypass luci-app-mail \
     luci-app-wol luci-app-opkg \
     luci-app-uhttpd \
     LINUX_5_4:luci-mod-rpc rpcd-mod-rpcsys rpcd-mod-file rpcd-mod-iwinfo \
-    luci-app-openvpn \
+    luci-proto-openvpn \
     shadowsocks-libev-ss-server shadowsocks-libev-ss-redir LINUX_5_4:shadowsocks-libev-ss-rules !LINUX_5_4:shadowsocks-libev-ss-rules-nft shadowsocks-libev-ss-tunnel \
     omr-6in4 ip6tables-mod-nat luci-proto-ipv6 6to4 6in4 6rd ip6tables \
     !TARGET_mvebu:speedtestcpp \
@@ -77,27 +77,28 @@ MY_DEPENDS := \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-mii !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-wdm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-qmi-wwan !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-mbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-huawei-cdc-ncm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-rndis !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-ether !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-ipheth !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):usbmuxd !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):libusbmuxd \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-proto-qmi !LINUX_5_4:wpad-mesh-openssl !LINUX_5_4:libopenssl-legacy LINUX_5_4:wpad-basic (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-usb-net-rtl8152 \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mlvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mlvpn 464xlat kmod-zram kmod-ipt-nat kmod-ipt-nat6 kmod-tcp-nanqinlang iptables-mod-ipopt igmpproxy ss iptraf-ng \
-    luci-app-acl block-mount blockd fstools luci-app-shutdown libwebp luci-proto-gre tcptraceroute luci-proto-mbim luci-app-ttyd luci-mod-dashboard kmod-usb2 libustream-openssl (TARGET_x86||TARGET_x86_64):kmod-ixgbevf (TARGET_x86||TARGET_x86_64):kmod-igbvf \
-    hwinfo (TARGET_x86||TARGET_x86_64):dmidecode kmod-bonding luci-proto-bonding luci-app-sysupgrade \
-    luci-theme-openwrt-2020 luci-proto-wireguard luci-app-wireguard kmod-crypto-lib-blake2s  \
-    !(LINUX_5_4):mptcpd (TARGET_x86||TARGET_x86_64):kmod-igc !TARGET_mvebu:kmod-mmc-spi kmod-macsec usbutils v2ray-core !LINUX_5_4:v2ray-config-nft \
+    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mlvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mlvpn 464xlat kmod-zram kmod-ipt-nat kmod-ipt-nat6 iptables-mod-ipopt igmpproxy ss iptraf-ng \
+    luci-app-acl block-mount blockd fstools luci-app-shutdown libwebp luci-proto-gre vxlan luci-proto-vxlan tcptraceroute luci-proto-mbim luci-app-ttyd luci-mod-dashboard kmod-usb2 libustream-openssl (TARGET_x86||TARGET_x86_64):kmod-ixgbevf (TARGET_x86||TARGET_x86_64):kmod-igbvf \
+    hwinfo (TARGET_x86||TARGET_x86_64):dmidecode kmod-bonding luci-app-sysupgrade \
+    luci-theme-openwrt-2020 luci-proto-wireguard \
+    !(LINUX_5_4):mptcpd (TARGET_x86||TARGET_x86_64):kmod-igc !TARGET_mvebu:kmod-mmc-spi kmod-macsec usbutils v2ray-core !LINUX_5_4:v2ray-config \
     (TARGET_x86||TARGET_x86_64):kmod-mlx4-core (TARGET_x86||TARGET_x86_64):kmod-mlx5-core \
-    !(TARGET_ipq40xx||TARGET_ramips||LINUX_6_6||LINUX_6_10||LINUX_6_11||LINUX_6_12||LINUX_6_15):iptables-mod-ndpi !(TARGET_ipq40xx||TARGET_ramips||LINUX_6_6||LINUX_6_10||LINUX_6_11||LINUX_6_12||LINUX_6_15):kmod-ipt-ndpi libip4tc libip6tc \
-    xray-core LINUX_5_4:xray-config !LINUX_5_4:xray-config-nft \
+    !(TARGET_ipq40xx||TARGET_ramips||LINUX_6_6||LINUX_6_10||LINUX_6_11||LINUX_6_12||LINUX_6_18):iptables-mod-ndpi !(TARGET_ipq40xx||TARGET_ramips||LINUX_6_6||LINUX_6_10||LINUX_6_11||LINUX_6_12||LINUX_6_18):kmod-ipt-ndpi libip4tc libip6tc \
+    xray-core !LINUX_5_4:xray-config \
     shadowsocks-rust-sslocal shadowsocks-rust-ssservice LINUX_5_4:shadowsocks-rust-config !LINUX_5_4:shadowsocks-rust-config-nft luci-app-shadowsocks-rust \
     luci-proto-external omr-schedule jq luci-app-ddns \
     mbim-utils (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-r8169 !(TARGET_ipq40xx||TARGET_x86_64):kmod-mt7601u !TARGET_x86_64:kmod-ath9k-htc \
     TARGET_mvebu:kmod-mwlwifi TARGET_mvebu:mwlwifi-firmware-88w8864 TARGET_mvebu:mwlwifi-firmware-88w8897 TARGET_mvebu:mwlwifi-firmware-88w8964 TARGET_mvebu:mwlwifi-firmware-88w8997 \
-    (LINUX_5_4&&(TARGET_x86_64||TARGET_aarch64)):kmod-tcp-bbr2 \
     TARGET_x86_64:kmod-atlantic \
-    !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-minrtt !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-bkup !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-burst !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-first !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-red !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-rr !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):bpftool-full \
-    kmod-ovpn-dco-v2 pciutils \
-    TARGET_mediatek_filogic:kmod-mt7915-firmware TARGET_mediatek_filogic:kmod-mt7916-firmware TARGET_mediatek_filogic:kmod-mt7986-firmware TARGET_mediatek_filogic:kmod-mt7986-wo-firmware TARGET_mediatek_filogic:kmod-mt7996-firmware TARGET_mediatek_filogic:kmod-mt7996-233-firmware TARGET_mediatek_filogic:mt7988-wo-firmware TARGET_mediatek_filogic:mt7988-2p5g-phy-firmware \
+    !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-bkup !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-burst !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-first !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-red !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-rr !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):bpftool-full \
+    !(LINUX_6_18):kmod-ovpn-dco-v2 pciutils \
+    TARGET_mediatek_filogic:kmod-mt7915-firmware TARGET_mediatek_filogic:kmod-mt7916-firmware TARGET_mediatek_filogic:kmod-mt7986-firmware TARGET_mediatek_filogic:kmod-mt7996-firmware TARGET_mediatek_filogic:kmod-mt7996-233-firmware TARGET_mediatek_filogic:mt7988-wo-firmware TARGET_mediatek_filogic:mt7988-2p5g-phy-firmware \
     (TARGET_x86||TARGET_x86_64):kmod-r8169 \
     !(TARGET_mt7623||TARGET_ipq806x):luci-app-smartdns logd TARGET_x86_64:kmod-i40e \
-    omr-banudpip luci-app-upnp
+    omr-banudpip luci-app-upnp kmod-inet-diag (TARGET_x86||TARGET_x86_64):luci-app-bpftune LINUX_6_18:kmod-ovpn luci-app-mqvpn luci-app-omr-metrics luci-app-irqbalance mptcp-bpf-weight mptcp-weight-manager \
+    mptcp-bpf-weight-rr mptcp-bpf-dscp mptcp-dscp-manager (TARGET_x86||TARGET_x86_64):luci-app-ndpid luci-app-omr-events omr-sockdiag
 
+# kmod-ovpn-dco-v2
 # kmod-swconfig swconfig
 # Disable softehervpn for now
 #    softethervpn5-client
